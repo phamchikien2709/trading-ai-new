@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from rsi_fvg.backtest.engine import TRADE_COLUMNS
-from rsi_fvg.backtest.metrics import compute_metrics, equity_from_trades, max_drawdown
+from rsi_fvg.backtest.metrics import _daily_returns, compute_metrics, equity_from_trades, max_drawdown
 
 
 def _trades(rows):
@@ -62,3 +62,33 @@ def test_profit_factor_no_losses_is_inf():
     tr = _trades([(0, 1, "BUY", 2.0, 200, 3)])
     m = compute_metrics(tr, equity_from_trades(tr, 10_000), 10_000)
     assert m["profit_factor"] == np.inf
+
+
+def test_sharpe_daily_known_value():
+    tr = _trades([(0, 1, "BUY", 1.0, 100, 5)])
+    idx = pd.to_datetime(["2025-01-06", "2025-01-07", "2025-01-08", "2025-01-09"], utc=True)
+    eq = pd.Series([10_000, 10_100, 10_000, 10_200.0], index=idx)
+    returns = np.array([0.01, -0.00990099, 0.02])
+    expected = returns.mean() / returns.std(ddof=1) * np.sqrt(252)
+    m = compute_metrics(tr, eq, 10_000)
+    assert m["sharpe_daily"] == pytest.approx(expected, rel=1e-6)
+
+
+def test_sharpe_forward_fills_gaps():
+    idx = pd.to_datetime(["2025-01-06", "2025-01-20"], utc=True)
+    eq = pd.Series([10_000, 10_100.0], index=idx)
+    r = _daily_returns(eq)
+    assert len(r) == 10
+    nonzero = r[r != 0]
+    assert len(nonzero) == 1
+    assert nonzero.iloc[0] == pytest.approx(0.01)
+
+
+def test_cagr_known_value():
+    idx = pd.to_datetime(["2025-01-01", "2026-01-01"], utc=True)
+    eq = pd.Series([10_000, 11_000.0], index=idx)
+    tr = _trades([(0, 1, "BUY", 1.0, 100, 5)])
+    years = 365 / 365.25
+    expected = 1.1 ** (1 / years) - 1
+    m = compute_metrics(tr, eq, 10_000)
+    assert m["cagr"] == pytest.approx(expected, rel=1e-9)

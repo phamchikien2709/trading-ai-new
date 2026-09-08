@@ -23,13 +23,21 @@ def equity_from_trades(trades: pd.DataFrame, initial_equity: float) -> pd.Series
     return pd.Series(vals, index=pd.DatetimeIndex(idx), name="equity")
 
 
+def _daily_returns(equity: pd.Series) -> pd.Series:
+    """Daily simple returns of the equity curve: calendar-day resample, forward-filled
+    across days without a mark, weekends dropped (XAUUSD trades Mon-Fri), then pct_change."""
+    if len(equity) < 2:
+        return pd.Series(dtype=float)
+    daily = equity.resample("1D").last().ffill()
+    daily = daily[daily.index.dayofweek < 5]
+    return daily.pct_change().dropna()
+
+
 def _sharpe_daily(equity: pd.Series) -> float:
     if len(equity) < 3:
         return 0.0
-    daily = equity.resample("1D").last().dropna().pct_change().dropna()
-    if len(daily) < 2 or daily.std() == 0:
-        return 0.0
-    return float(daily.mean() / daily.std() * np.sqrt(252))
+    r = _daily_returns(equity)
+    return 0.0 if len(r) < 2 or r.std() == 0 else float(r.mean() / r.std() * np.sqrt(252))
 
 
 def _cagr(equity: pd.Series, initial_equity: float) -> float:
