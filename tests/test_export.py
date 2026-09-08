@@ -76,3 +76,17 @@ def test_write_html_contents(tmp_path):
     assert "cdn.plot.ly" in html                   # cdn mode by default
     write_html(tmp_path / "off.html", df, rec, res, info, offline=True)
     assert (tmp_path / "off.html").stat().st_size > 1_000_000   # plotly.js embedded
+
+
+def test_write_html_handles_incomplete_grid(tmp_path):
+    df, rec, res, info = _fixture()
+    incomplete_df = df.iloc[:-1]  # Drop one row to create incomplete (3-of-4) grid
+    p = tmp_path / "r.html"
+    write_html(p, incomplete_df, rec, res, info)
+    html = p.read_text(encoding="utf-8")
+    assert p.exists()
+    assert "Recommendation" in html
+    # Also test write_xlsx does not crash on incomplete grid
+    xlsx_p = tmp_path / "r.xlsx"
+    write_xlsx(xlsx_p, incomplete_df, rec, res, info)
+    assert xlsx_p.exists()

@@ -231,7 +231,8 @@ def _fig_heatmaps(tf: str, g: pd.DataFrame) -> go.Figure:
         gg = g[(g["ob"] == ob) & (g["os"] == os_) & (g["f_hi"] == fh) & (g["f_lo"] == fl)]
         piv = gg.pivot(index="atr_mult", columns="tp_r", values="oos_avg_r").sort_index()
         ntr = gg.pivot(index="atr_mult", columns="tp_r", values="n_trades").reindex_like(piv)
-        text = [[f"{v:+.2f}<br>n={int(k)}" for v, k in zip(rv, rk)] for rv, rk in zip(piv.values, ntr.values)]
+        text = [[("" if (pd.isna(v) or pd.isna(k)) else f"{v:+.2f}<br>n={int(k)}")
+                 for v, k in zip(rv, rk)] for rv, rk in zip(piv.values, ntr.values)]
         fig.add_trace(go.Heatmap(z=piv.values, x=[f"TP {c:g}R" for c in piv.columns],
                                  y=[f"ATR×{r:g}" for r in piv.index], colorscale=_DIVERGING, zmid=0,
                                  zmin=-zmax, zmax=zmax, text=text, texttemplate="%{text}",
