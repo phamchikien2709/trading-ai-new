@@ -76,3 +76,25 @@ def pivot_low(low: np.ndarray, left: int, right: int) -> np.ndarray:
         if np.all(low[i - left:i] > v) and np.all(low[i + 1:i + 1 + right] > v):
             out[i] = True
     return out
+
+
+def ema(close: np.ndarray, period: int) -> np.ndarray:
+    """Exponential moving average, `alpha = 2/(period+1)`, recursion seeded with `close[0]`.
+
+    The first `period-1` values are NaN so callers skip the warm-up. Pine's `ta.ema` emits
+    values there instead — that prefix is the one intended Python/Pine divergence, and it is
+    far behind the first tradable bar on any real series.
+    """
+    close = np.asarray(close, dtype=np.float64)
+    n = close.shape[0]
+    out = np.full(n, np.nan)
+    if n == 0:
+        return out
+    alpha = 2.0 / (period + 1.0)
+    prev = float(close[0])
+    for i in range(n):
+        if i:
+            prev += alpha * (float(close[i]) - prev)
+        if i >= period - 1:
+            out[i] = prev
+    return out

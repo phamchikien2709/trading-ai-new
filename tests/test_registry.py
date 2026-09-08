@@ -69,3 +69,18 @@ def test_robust_axis_must_be_single_column():
         StrategyAdapter(name="bad", axes=(Axis("pair", ("a", "b"), ("x", "y")),),
                         default_axes={"pair": ((1, 2),)}, default_tp_r=(1.0,),
                         params_cls=Rsi2SwingParams, run=run_strategy, robust_axis="pair")
+
+
+def test_rsi2_ema_swing_adapter():
+    from rsi_fvg.backtest.optimize import GridSpec
+    from rsi_fvg.strategies.rsi2_ema_swing import Rsi2EmaParams
+    a = get_adapter("rsi2_ema_swing")
+    assert a.key_cols == ("rsi_fast", "f_hi", "f_lo", "ema_fast", "ema_slow", "atr_mult")
+    assert a.robust_cols == ["tf", "rsi_fast", "f_hi", "f_lo", "ema_fast", "ema_slow"]
+    assert GridSpec.for_strategy(a).size() == 384
+    p = a.make_params(Rsi2EmaParams(), {"rsi_fast": 5, "rsi2": (95.0, 5.0),
+                                        "ema": (50, 200), "atr_mult": 2.0})
+    assert (p.rsi_fast, p.fast_hi, p.fast_lo, p.ema_fast, p.ema_slow, p.atr_mult) == (5, 95.0, 5.0, 50, 200, 2.0)
+    assert isinstance(p.ema_fast, int) and isinstance(p.ema_slow, int)
+    assert a.title({"rsi_fast": 2, "f_hi": 90.0, "f_lo": 10.0, "ema_fast": 20,
+                    "ema_slow": 100}) == "RSI(2) 90/10 · EMA 20/100"

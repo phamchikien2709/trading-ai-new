@@ -11,6 +11,8 @@ from typing import Callable, Sequence
 
 from ..bars import Bars
 from ..signals import Signal
+from .rsi2_ema_swing import Rsi2EmaParams
+from .rsi2_ema_swing import run_strategy as run_rsi2_ema_swing
 from .rsi2_swing import Rsi2SwingParams
 from .rsi2_swing import run_strategy as run_rsi2_swing
 
@@ -135,7 +137,30 @@ RSI2_SWING = StrategyAdapter(
     panel_title=_rsi2_swing_title,
 )
 
-STRATEGIES: dict[str, StrategyAdapter] = {RSI2_SWING.name: RSI2_SWING}
+
+def _rsi2_ema_title(row: dict) -> str:
+    return (f"RSI({int(row['rsi_fast'])}) {int(row['f_hi'])}/{int(row['f_lo'])}"
+            f" · EMA {int(row['ema_fast'])}/{int(row['ema_slow'])}")
+
+
+RSI2_EMA_SWING = StrategyAdapter(
+    name="rsi2_ema_swing",
+    axes=(Axis("rsi_fast", ("rsi_fast",), ("rsi_fast",), int_cols=("rsi_fast",)),
+          Axis("rsi2", ("f_hi", "f_lo"), ("fast_hi", "fast_lo")),
+          Axis("ema", ("ema_fast", "ema_slow"), ("ema_fast", "ema_slow"),
+               int_cols=("ema_fast", "ema_slow")),
+          Axis("atr_mult", ("atr_mult",), ("atr_mult",))),
+    default_axes={"rsi_fast": (2, 3, 5),
+                  "rsi2": ((90.0, 10.0), (95.0, 5.0)),
+                  "ema": ((20, 100), (20, 200), (50, 200), (10, 50)),
+                  "atr_mult": (1.0, 1.5, 2.0, 3.0)},
+    default_tp_r=(2.0, 4.0, 6.0, 8.0),
+    params_cls=Rsi2EmaParams,
+    run=run_rsi2_ema_swing,
+    panel_title=_rsi2_ema_title,
+)
+
+STRATEGIES: dict[str, StrategyAdapter] = {a.name: a for a in (RSI2_SWING, RSI2_EMA_SWING)}
 
 
 def get_adapter(name: str) -> StrategyAdapter:

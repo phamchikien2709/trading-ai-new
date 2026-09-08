@@ -79,3 +79,20 @@ def test_pivot_low_mirror():
     low = np.array([5, 4, 1, 4, 5, 1, 1, 5.0])
     pl = pivot_low(low, 2, 2)
     assert pl[2] and not pl[5] and not pl[6]
+
+
+def test_ema_hand_computed_with_nan_warmup():
+    from rsi_fvg.indicators import ema
+    close = np.array([10.0, 20.0, 30.0, 40.0])
+    got = ema(close, 3)                      # alpha = 0.5, seed = close[0]
+    assert np.isnan(got[0]) and np.isnan(got[1])
+    assert got[2] == pytest.approx(22.5)     # 10 -> 15 -> 22.5
+    assert got[3] == pytest.approx(31.25)
+
+
+def test_ema_period_one_is_the_close_and_short_input_is_safe():
+    from rsi_fvg.indicators import ema
+    close = np.array([5.0, 7.0, 9.0])
+    np.testing.assert_allclose(ema(close, 1), close)
+    assert np.all(np.isnan(ema(close, 10)))
+    assert ema(np.array([]), 5).shape == (0,)
