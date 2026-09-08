@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from rsi_fvg.params import SymbolSpec
@@ -30,3 +32,35 @@ def test_max_lot_clamp():
 def test_invalid_sl_dist_raises():
     with pytest.raises(ValueError):
         lots_for_risk(10_000, 1.0, 0.0, SPEC)
+
+
+def test_floor_epsilon_does_not_lose_a_step():
+    # Regression test for floating-point floor edge case (plan requirement).
+    # The epsilon (1e-9) in sizing.py:14 prevents loss of a step when raw/lot_step
+    # lands just below an integer due to float representation.
+    # Example: raw=9.7999999999902, raw/0.01=979.99999999902 (just below 980).
+    # Without epsilon: floor(979.99999...) = 979 (WRONG, loses one lot).
+    # With epsilon: floor(979.99999... + 1e-9) = floor(980) = 980 (CORRECT).
+    # This test verifies the epsilon closes the gap for such floating-point edge cases.
+
+    # Construct inputs to produce raw just below a step boundary.
+    # Using equity=9800, risk_pct=0.1, contract_size=1.0 gives risk_usd=9.8.
+    # Set sl_dist = 1/(1-1e-12) ≈ 1.000000000001 to nudge raw just below 9.8.
+    # Result: raw ≈ 9.7999999999902, so raw/lot_step ≈ 979.99999999902 < 980.
+    equity = 9800.0
+    risk_pct = 0.1
+    sl_dist = 1.0 / (1.0 - 1e-12)
+    contract_size = 1.0
+
+    # Verify the computation produces the edge case: floor without epsilon loses a step.
+    risk_usd = equity * risk_pct / 100.0
+    raw = risk_usd / (sl_dist * contract_size)
+    assert math.floor(raw / SPEC.lot_step) == 979, "Edge case not constructed (floor should be 979)"
+
+    # Verify the epsilon in sizing.py lifts it to 980.
+    assert math.floor(raw / SPEC.lot_step + 1e-9) == 980, "Epsilon should lift 979.9999... to 980"
+
+    # Now verify the function handles it correctly by returning 9.80 lots.
+    lots, oversized = lots_for_risk(equity, risk_pct, sl_dist, SPEC)
+    assert lots == pytest.approx(9.80), f"Expected 9.80, got {lots}"
+    assert not oversized, f"Expected not oversized, got {oversized}"
