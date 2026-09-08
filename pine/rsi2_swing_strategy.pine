@@ -33,7 +33,7 @@ strategy("RSI2 Swing Pullback", shorttitle="RSI2-SWING", overlay=true,
 // ---------------------------------------------------------------- inputs ----
 grpEntry = "Entry / Risk"
 tpR        = input.float(2.0, "Take profit (R)", minval=0.1, step=0.5, group=grpEntry)
-riskPct    = input.float(1.0, "Risk % of equity per trade", minval=0.01, step=0.25, group=grpEntry)
+riskPct    = input.float(5.0, "Risk % of equity per trade", minval=0.01, step=0.25, group=grpEntry)
 enableBuy  = input.bool(true, "Enable BUY", group=grpEntry)
 enableSell = input.bool(true, "Enable SELL", group=grpEntry)
 blockOpp   = input.bool(true, "Block opposite signal while in trade", group=grpEntry,
