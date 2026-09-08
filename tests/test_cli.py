@@ -42,7 +42,7 @@ def test_cli_writes_grid_and_reports(tmp_path):
     _write_cache(data_dir)
     cmd = [sys.executable, str(ROOT / "scripts" / "run_rsi2_swing.py"),
            "--symbol", SYMBOL, "--tf", "M5", "--tp", "2", "--atr-mult", "1",
-           "--rsi14", "75/25", "--rsi2", "90/10",
+           "--rsi14", "75/25", "--rsi2", "90/10", "--rsi-fast", "2", "5",
            "--data-dir", str(data_dir), "--out", str(out_dir)]
     p = subprocess.run(cmd, capture_output=True, text=True, cwd=ROOT, timeout=600)
     assert p.returncode == 0, f"stdout:\n{p.stdout}\nstderr:\n{p.stderr}"
@@ -53,7 +53,9 @@ def test_cli_writes_grid_and_reports(tmp_path):
     assert (run / "grid.csv").exists()
     assert (run / f"report_{SYMBOL}.xlsx").exists()
     assert (run / f"report_{SYMBOL}.html").exists()
-    assert len(pd.read_csv(run / "grid.csv")) == 1          # one combo in the grid
+    grid = pd.read_csv(run / "grid.csv")
+    assert len(grid) == 2                                   # one combo per fast-RSI length
+    assert sorted(grid["rsi_fast"]) == [2, 5]
 
 
 def test_pairs_rejects_malformed_values():

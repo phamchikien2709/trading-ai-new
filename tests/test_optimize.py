@@ -3,7 +3,8 @@ import pandas as pd
 import pytest
 
 from rsi_fvg.backtest.optimize import (KEY_COLS, SPLIT_KEYS, GridSpec, _segment_metrics, add_robustness,
-                                       compute_flags, recommend, run_optimization, run_single, split_time)
+                                       compute_flags, make_params, recommend, run_optimization, run_single,
+                                       split_time)
 from rsi_fvg.bars import Bars
 from rsi_fvg.params import CostParams, SizingParams, SymbolSpec
 from rsi_fvg.strategies.rsi2_swing import Rsi2SwingParams
@@ -25,6 +26,13 @@ def _bars(n=6000, seed=11):
 
 def test_grid_size_default_and_small():
     assert GridSpec().size() == 225 and SMALL.size() == 4
+    assert GridSpec(rsi_fast=(2, 5)).size() == 450       # the fast-RSI length is a full grid axis
+
+
+def test_make_params_sets_rsi_fast_only_when_given():
+    base = Rsi2SwingParams()
+    assert make_params(base, 70, 30, 90, 10, 1.0).rsi_fast == base.rsi_fast
+    assert make_params(base, 70, 30, 90, 10, 1.0, rsi_fast=5).rsi_fast == 5
 
 
 def test_split_time_70_30():
@@ -38,6 +46,7 @@ def test_run_optimization_rows_and_columns():
     df = run_optimization({"M5": b}, {"M5": SPEC}, Rsi2SwingParams(), SMALL, COSTS, SIZING,
                           progress=lambda d, t: calls.append((d, t)))
     assert len(df) == 4 and calls[-1] == (4, 4)
+    assert (df["rsi_fast"] == 2).all()
     for c in KEY_COLS + ["n_signals", "split_time", "oversized_share", "capped_share", "ruined", "ruin_time",
                          "grid_edge", "robust_r", "robust_ratio", "flags",
                          "n_trades", "avg_r", "max_dd_pct", "sortino_daily", "time_in_market_pct"]:
@@ -50,17 +59,30 @@ def test_run_optimization_rows_and_columns():
     assert df["flags"].map(lambda s: isinstance(s, str)).all()
 
 
+def test_rsi_fast_axis_multiplies_rows_and_changes_signals():
+    b = _bars()
+    grid = GridSpec(tp_r=(1.0,), atr_mult=(1.0,), rsi_slow_levels=((75.0, 25.0),),
+                    rsi_fast_levels=((90.0, 10.0),), rsi_fast=(2, 5))
+    df = run_optimization({"M5": b}, {"M5": SPEC}, Rsi2SwingParams(), grid, COSTS, SIZING)
+    assert len(df) == 2 and sorted(df["rsi_fast"]) == [2, 5]
+    assert df["n_signals"].nunique() == 2            # a different fast length is a different strategy
+
+
 def test_run_single_matches_grid_row():
     b = _bars()
-    df = run_optimization({"M5": b}, {"M5": SPEC}, Rsi2SwingParams(), SMALL, COSTS, SIZING)
-    row = df.iloc[0]
-    params = Rsi2SwingParams(atr_mult=row.atr_mult)
-    sigs, res = run_single(b, SPEC, params, row.tp_r, COSTS, SIZING, "hedge")
-    assert len(sigs) == row.n_signals and len(res.trades) == row.n_trades
+    grid = GridSpec(tp_r=(1.0, 2.0), atr_mult=(1.0,), rsi_slow_levels=((75.0, 25.0),),
+                    rsi_fast_levels=((90.0, 10.0),), rsi_fast=(2, 5))
+    df = run_optimization({"M5": b}, {"M5": SPEC}, Rsi2SwingParams(), grid, COSTS, SIZING)
+    assert len(df) == 4
+    for row in df.itertuples():
+        params = make_params(Rsi2SwingParams(), row.ob, row.os, row.f_hi, row.f_lo, row.atr_mult,
+                             rsi_fast=int(row.rsi_fast))
+        sigs, res = run_single(b, SPEC, params, row.tp_r, COSTS, SIZING, "hedge")
+        assert len(sigs) == row.n_signals and len(res.trades) == row.n_trades
 
 
 def _robust_df(**over):
-    base = {"tf": "M5", "ob": 75.0, "os": 25.0, "f_hi": 90.0, "f_lo": 10.0,
+    base = {"tf": "M5", "rsi_fast": 2, "ob": 75.0, "os": 25.0, "f_hi": 90.0, "f_lo": 10.0,
             "tp_r": [1.0, 1.0, 2.0, 2.0], "atr_mult": [0.5, 1.0, 0.5, 1.0],
             "is_avg_r": [1.0, 2.0, 3.0, 4.0], "ruined": False}
     return pd.DataFrame(base | over)
@@ -94,10 +116,21 @@ def test_add_robustness_groups_by_all_four_rsi_levels():
     assert out.loc[4, "robust_r"] == pytest.approx(30.0)
 
 
+def test_add_robustness_groups_by_rsi_fast_length():
+    # RSI(2) and RSI(5) at the same levels are different strategies: never pool their neighbours.
+    grid = GridSpec(tp_r=(1.0, 2.0), atr_mult=(0.5, 1.0), rsi_slow_levels=((75, 25),),
+                    rsi_fast_levels=((90, 10),), rsi_fast=(2, 5))
+    df = pd.concat([_robust_df(), _robust_df(rsi_fast=5, is_avg_r=[10.0, 20.0, 30.0, 40.0])],
+                   ignore_index=True)
+    out = add_robustness(df, grid)
+    assert out.loc[0, "robust_r"] == pytest.approx(3.0)
+    assert out.loc[4, "robust_r"] == pytest.approx(30.0)
+
+
 def test_grid_edge_flag():
     grid = GridSpec(tp_r=(1.0, 2.0, 3.0), atr_mult=(0.0, 0.5, 1.0),
                     rsi_slow_levels=((75, 25),), rsi_fast_levels=((90, 10),))
-    df = pd.DataFrame({"tf": "M5", "ob": 75.0, "os": 25.0, "f_hi": 90.0, "f_lo": 10.0,
+    df = pd.DataFrame({"tf": "M5", "rsi_fast": 2, "ob": 75.0, "os": 25.0, "f_hi": 90.0, "f_lo": 10.0,
                        "tp_r": [2.0, 1.0, 2.0, 3.0], "atr_mult": [0.5, 0.5, 0.0, 0.5],
                        "is_avg_r": 1.0, "ruined": False})
     edge = add_robustness(df, grid)["grid_edge"].tolist()
@@ -130,7 +163,8 @@ def test_segment_metrics_uses_the_real_equity_slice():
 
 
 def _grid_df(rows):
-    cols = {"tf": "M5", "ob": 75.0, "os": 25.0, "f_hi": 90.0, "f_lo": 10.0, "atr_mult": 1.0, "tp_r": 2.0,
+    cols = {"tf": "M5", "rsi_fast": 2, "ob": 75.0, "os": 25.0, "f_hi": 90.0, "f_lo": 10.0,
+            "atr_mult": 1.0, "tp_r": 2.0,
             "is_n_trades": 40, "oos_n_trades": 15, "is_avg_r": 0.3, "oos_avg_r": 0.2, "robust_r": 0.25,
             "oversized_share": 0.0, "capped_share": 0.0, "ruined": False, "grid_edge": False,
             "net_pnl": 1_500.0, "profit_factor": 1.4, "max_dd_pct": 0.1, "win_rate": 0.4,
@@ -161,6 +195,7 @@ def test_recommend_picks_best_score_and_explains():
     rec = recommend(df)["M5"]
     assert rec is not None and rec["params"]["tp_r"] == 2.0
     assert set(rec["params"]) == set(KEY_COLS)
+    assert rec["params"]["rsi_fast"] == 2 and isinstance(rec["params"]["rsi_fast"], int)
     for token in ("net $", "PF ", "max DD", "OOS", "robust"):
         assert token in rec["reason"]
 

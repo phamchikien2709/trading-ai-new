@@ -65,6 +65,8 @@ def main() -> int:
     ap.add_argument("--atr-mult", nargs="*", type=float, default=[0, 0.5, 1, 1.5, 2])
     ap.add_argument("--rsi14", nargs="*", default=["70/30", "75/25", "80/20"])
     ap.add_argument("--rsi2", nargs="*", default=["85/15", "90/10", "95/5"])
+    ap.add_argument("--rsi-fast", nargs="*", type=int, default=[2],
+                    help="structure-RSI lengths to scan (grid axis); 2 = the Pine default")
     ap.add_argument("--max-wait", type=int, default=0)
     ap.add_argument("--is-frac", type=float, default=0.7)
     ap.add_argument("--data-dir", default=str(ROOT / "data"),
@@ -78,7 +80,8 @@ def main() -> int:
     tfs = a.tf or cfg.timeframes
     sizing = replace(cfg.sizing, risk_pct=a.risk)
     grid = GridSpec(tp_r=tuple(float(x) for x in a.tp), atr_mult=tuple(float(x) for x in a.atr_mult),
-                    rsi_slow_levels=_pairs(a.rsi14), rsi_fast_levels=_pairs(a.rsi2))
+                    rsi_slow_levels=_pairs(a.rsi14), rsi_fast_levels=_pairs(a.rsi2),
+                    rsi_fast=tuple(int(x) for x in a.rsi_fast))
     base = Rsi2SwingParams(max_wait=a.max_wait)
 
     bars_by_tf, spec_by_tf, ranges = {}, {}, {}
@@ -110,7 +113,8 @@ def main() -> int:
         if r is None:
             continue
         p = r["params"]
-        params = make_params(base, p["ob"], p["os"], p["f_hi"], p["f_lo"], p["atr_mult"])
+        params = make_params(base, p["ob"], p["os"], p["f_hi"], p["f_lo"], p["atr_mult"],
+                             rsi_fast=int(p["rsi_fast"]))
         _, res = run_single(bars_by_tf[tf], spec_by_tf[tf], params, p["tp_r"], cfg.costs, sizing, a.concurrency)
         rec_results[tf] = res
 
@@ -118,7 +122,8 @@ def main() -> int:
                 "risk_pct": sizing.risk_pct, "concurrency": a.concurrency, "spread_points": cfg.costs.spread_points,
                 "commission_per_lot_rt": cfg.costs.commission_per_lot_rt, "slippage_points": cfg.costs.slippage_points,
                 "is_frac": a.is_frac, "max_wait": a.max_wait,
-                "grid": {"tp_r": list(grid.tp_r), "atr_mult": list(grid.atr_mult), "rsi14": a.rsi14, "rsi2": a.rsi2},
+                "grid": {"tp_r": list(grid.tp_r), "atr_mult": list(grid.atr_mult), "rsi14": a.rsi14, "rsi2": a.rsi2,
+                         "rsi_fast": list(grid.rsi_fast)},
                 "git_hash": _git_hash(), "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
 
     out_dir = Path(a.out) / datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -137,7 +142,8 @@ def main() -> int:
             print(f"{tf}: no reliable parameter set")
         else:
             p, row = r["params"], r["row"]
-            print(f"{tf}: TP {p['tp_r']:g}R  ATRx{p['atr_mult']:g}  RSI14 {p['ob']:g}/{p['os']:g}  RSI2 {p['f_hi']:g}/{p['f_lo']:g}")
+            print(f"{tf}: TP {p['tp_r']:g}R  ATRx{p['atr_mult']:g}  RSI14 {p['ob']:g}/{p['os']:g}  "
+                  f"RSI fast {p['rsi_fast']:g}  {p['f_hi']:g}/{p['f_lo']:g}")
             print(f"     net ${row['net_pnl']:,.0f}  PF {row['profit_factor']:.2f}  "
                   f"max DD {row['max_dd_pct']:.1%}  capped {row.get('capped_share', 0.0):.0%}")
             print(f"     {r['reason']}")

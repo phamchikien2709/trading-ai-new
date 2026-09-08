@@ -34,7 +34,8 @@ def _fixture():
     info = {"symbol": "T", "timeframes": ["M5"], "data_range": {"M5": ("2023-11-14", "2023-12-05")},
             "initial_equity": 10_000, "risk_pct": 5.0, "concurrency": "hedge", "spread_points": 20,
             "commission_per_lot_rt": 0.0, "slippage_points": 0, "is_frac": 0.7,
-            "grid": {"tp_r": [1, 2], "atr_mult": [0.5, 1], "rsi14": ["75/25"], "rsi2": ["90/10"]},
+            "grid": {"tp_r": [1, 2], "atr_mult": [0.5, 1], "rsi14": ["75/25"], "rsi2": ["90/10"],
+                     "rsi_fast": [2]},
             "git_hash": "test", "generated_at": "2026-09-08 00:00"}
     return df, rec, {"M5": res}, info
 
@@ -85,16 +86,16 @@ def test_write_xlsx_sheets_and_rows(tmp_path):
     assert {"Summary", "Grid", "Trades_M5", "Monthly_M5", "Equity_M5", "Params"} <= set(wb.sheetnames)
     assert wb["Grid"].max_row == 5            # header + 4 combos
     head = [c.value for c in next(wb["Grid"].iter_rows(min_row=1, max_row=1))]
-    assert head[:7] == ["tf", "ob", "os", "f_hi", "f_lo", "atr_mult", "tp_r"]
+    assert head[:8] == ["tf", "rsi_fast", "ob", "os", "f_hi", "f_lo", "atr_mult", "tp_r"]
     assert wb["Equity_M5"].max_row <= 20_001   # downsampled
 
 
 def _rec_for(df):
     """A recommendation dict for row 0, as recommend() would return it (random-walk bars
     never clear the profit gates, so the 'recommended' branch needs a hand-built pick)."""
-    from rsi_fvg.backtest.optimize import KEY_COLS, _reason
+    from rsi_fvg.backtest.optimize import KEY_COLS, _param_value, _reason
     best = df.iloc[0]
-    return {"M5": {"params": {k: (best[k] if k == "tf" else float(best[k])) for k in KEY_COLS},
+    return {"M5": {"params": {k: _param_value(best, k) for k in KEY_COLS},
                    "score": 1.23, "row": best.to_dict(), "reason": _reason(best)}}
 
 
@@ -110,6 +111,19 @@ def test_reports_show_cash_metrics_for_a_recommended_combo(tmp_path):
     html = (tmp_path / "r.html").read_text(encoding="utf-8")
     for token in ("net P&amp;L", "profit factor", "max drawdown", "capped lots"):
         assert token in html
+
+
+def test_reports_name_the_fast_rsi_length(tmp_path):
+    df, _, res, info = _fixture()
+    rec = _rec_for(df)
+    write_html(tmp_path / "r.html", df, rec, res, info)
+    html = (tmp_path / "r.html").read_text(encoding="utf-8")
+    assert "RSI fast" in html                  # recommendation line
+    assert "RSI(2) 90" in html                 # heatmap panel title (plotly escapes the "/")
+    write_xlsx(tmp_path / "r.xlsx", df, rec, res, info)
+    wb = openpyxl.load_workbook(tmp_path / "r.xlsx", read_only=True)
+    cells = [c.value for row in wb["Summary"].iter_rows() for c in row if isinstance(c.value, str)]
+    assert "rsi_fast" in cells
 
 
 def test_write_xlsx_handles_no_recommendation(tmp_path):

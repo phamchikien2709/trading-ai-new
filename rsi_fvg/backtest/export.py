@@ -236,16 +236,18 @@ def _fig_r_hist(tf: str, res: BacktestResult) -> go.Figure:
 
 
 def _fig_heatmaps(tf: str, g: pd.DataFrame) -> go.Figure:
-    combos = sorted(set(zip(g["ob"], g["os"], g["f_hi"], g["f_lo"])))
+    combos = sorted(set(zip(g["rsi_fast"], g["ob"], g["os"], g["f_hi"], g["f_lo"])))
     n = len(combos)
     cols = min(3, n)
     rows = int(np.ceil(n / cols))
-    titles = [f"RSI14 {int(ob)}/{int(os_)} · RSI2 {int(fh)}/{int(fl)}" for ob, os_, fh, fl in combos]
+    titles = [f"RSI({int(k)}) {int(fh)}/{int(fl)} · RSI14 {int(ob)}/{int(os_)}"
+              for k, ob, os_, fh, fl in combos]
     fig = make_subplots(rows=rows, cols=cols, subplot_titles=titles, horizontal_spacing=0.06, vertical_spacing=0.12)
     zmax = float(np.nanmax(np.abs(g["oos_avg_r"].to_numpy()))) if len(g) else 1.0
     zmax = max(zmax, 1e-9)
-    for i, (ob, os_, fh, fl) in enumerate(combos):
-        gg = g[(g["ob"] == ob) & (g["os"] == os_) & (g["f_hi"] == fh) & (g["f_lo"] == fl)]
+    for i, (k, ob, os_, fh, fl) in enumerate(combos):
+        gg = g[(g["rsi_fast"] == k) & (g["ob"] == ob) & (g["os"] == os_)
+               & (g["f_hi"] == fh) & (g["f_lo"] == fl)]
         piv = gg.pivot(index="atr_mult", columns="tp_r", values="oos_avg_r").sort_index()
         ntr = gg.pivot(index="atr_mult", columns="tp_r", values="n_trades").reindex_like(piv)
         text = [[("" if (pd.isna(v) or pd.isna(k)) else f"{v:+.2f}<br>n={int(k)}")
@@ -261,7 +263,8 @@ def _fig_heatmaps(tf: str, g: pd.DataFrame) -> go.Figure:
 
 
 def _fig_is_oos(tf: str, g: pd.DataFrame) -> go.Figure:
-    labels = [f"TP {r.tp_r:g}R · ATR×{r.atr_mult:g} · RSI14 {int(r.ob)}/{int(r.os)} · RSI2 {int(r.f_hi)}/{int(r.f_lo)}"
+    labels = [f"TP {r.tp_r:g}R · ATR×{r.atr_mult:g} · RSI14 {int(r.ob)}/{int(r.os)} · "
+              f"RSI({int(r.rsi_fast)}) {int(r.f_hi)}/{int(r.f_lo)}"
               f"<br>n={int(r.n_trades)} · flags: {r.flags or '-'}" for r in g.itertuples()]
     fig = go.Figure(go.Scatter(x=g["is_avg_r"], y=g["oos_avg_r"], mode="markers", text=labels,
                                hovertemplate="%{text}<br>IS %{x:+.2f}R · OOS %{y:+.2f}R<extra></extra>",
@@ -312,7 +315,8 @@ def write_html(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[s
         else:
             p, row = r["params"], r["row"]
             parts.append(f"<div class='rec'><b>{e(tf)}</b>: TP <b>{p['tp_r']:g}R</b>, ATR mult <b>{p['atr_mult']:g}</b>, "
-                         f"RSI14 <b>{p['ob']:g}/{p['os']:g}</b>, RSI2 <b>{p['f_hi']:g}/{p['f_lo']:g}</b>"
+                         f"RSI14 <b>{p['ob']:g}/{p['os']:g}</b>, RSI fast <b>{p['rsi_fast']:g}</b> "
+                         f"<b>{p['f_hi']:g}/{p['f_lo']:g}</b>"
                          f"<br>net P&amp;L <b>${row['net_pnl']:,.0f}</b> · profit factor <b>{row['profit_factor']:.2f}</b> · "
                          f"max drawdown <b>{row['max_dd_pct']:.1%}</b> · capped lots "
                          f"<b>{row.get('capped_share', 0.0):.0%}</b>"

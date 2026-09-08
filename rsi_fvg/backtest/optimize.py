@@ -14,9 +14,10 @@ from ..strategies.rsi2_swing import Rsi2SwingParams, run_strategy
 from .engine import BacktestResult, run_backtest
 from .metrics import compute_metrics, equity_from_trades, max_drawdown
 
-KEY_COLS = ["tf", "ob", "os", "f_hi", "f_lo", "atr_mult", "tp_r"]
+KEY_COLS = ["tf", "rsi_fast", "ob", "os", "f_hi", "f_lo", "atr_mult", "tp_r"]
 SPLIT_KEYS = ("n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct", "net_pnl", "expectancy_usd")
-ROBUST_KEYS = ["tf", "ob", "os", "f_hi", "f_lo"]
+ROBUST_KEYS = ["tf", "rsi_fast", "ob", "os", "f_hi", "f_lo"]
+INT_KEY_COLS = ("rsi_fast",)
 
 # Recommendation gates (spec §4.3). A combo has to be profitable in cash, not just in R:
 # 107 of 675 combos in the first full run had avg_r > 0 while losing money, and the delivered
@@ -39,9 +40,14 @@ class GridSpec:
     atr_mult: tuple[float, ...] = (0.0, 0.5, 1.0, 1.5, 2.0)
     rsi_slow_levels: tuple[tuple[float, float], ...] = ((70.0, 30.0), (75.0, 25.0), (80.0, 20.0))
     rsi_fast_levels: tuple[tuple[float, float], ...] = ((85.0, 15.0), (90.0, 10.0), (95.0, 5.0))
+    # V1: the structure-RSI *length* is an axis too. On M5 the RSI(2) stop sits within a few
+    # spreads of price; a longer fast RSI marks wider swings, and length 5 was the first
+    # setting with positively-robust results.
+    rsi_fast: tuple[int, ...] = (2,)
 
     def size(self) -> int:
-        return len(self.tp_r) * len(self.atr_mult) * len(self.rsi_slow_levels) * len(self.rsi_fast_levels)
+        return (len(self.tp_r) * len(self.atr_mult) * len(self.rsi_slow_levels)
+                * len(self.rsi_fast_levels) * len(self.rsi_fast))
 
 
 def split_time(bars: Bars, is_frac: float) -> pd.Timestamp:
@@ -50,9 +56,10 @@ def split_time(bars: Bars, is_frac: float) -> pd.Timestamp:
 
 
 def make_params(base: Rsi2SwingParams, ob: float, os_: float, f_hi: float, f_lo: float,
-                atr_mult: float) -> Rsi2SwingParams:
-    return replace(base, overbought=float(ob), oversold=float(os_), fast_hi=float(f_hi),
-                   fast_lo=float(f_lo), atr_mult=float(atr_mult))
+                atr_mult: float, rsi_fast: int | None = None) -> Rsi2SwingParams:
+    params = replace(base, overbought=float(ob), oversold=float(os_), fast_hi=float(f_hi),
+                     fast_lo=float(f_lo), atr_mult=float(atr_mult))
+    return params if rsi_fast is None else replace(params, rsi_fast=int(rsi_fast))
 
 
 def run_single(bars: Bars, spec: SymbolSpec, params: Rsi2SwingParams, tp_r: float, costs: CostParams,
@@ -90,32 +97,34 @@ def run_optimization(bars_by_tf: dict[str, Bars], spec_by_tf: dict[str, SymbolSp
         split = split_time(bars, is_frac)
         n_bars = len(bars)
         spec = spec_by_tf[tf]
-        for ob, os_ in grid.rsi_slow_levels:
-            for f_hi, f_lo in grid.rsi_fast_levels:
-                for am in grid.atr_mult:
-                    params = make_params(base, ob, os_, f_hi, f_lo, am)
-                    signals = run_strategy(bars, params)
-                    for tp in grid.tp_r:
-                        res = run_backtest(bars, signals, float(tp), spec, costs, sizing, concurrency)
-                        tr = res.trades
-                        n_blocked = int((res.skipped["reason"] == "blocked").sum()) if len(res.skipped) else 0
-                        full = compute_metrics(tr, res.equity, init, n_blocked=n_blocked, n_bars=n_bars)
-                        is_tr = tr[tr["entry_time"] < split]
-                        oos_tr = tr[tr["entry_time"] >= split]
-                        eq = res.equity
-                        is_m = _segment_metrics(is_tr, eq[eq.index < split], init)
-                        oos_m = _segment_metrics(oos_tr, eq[eq.index >= split], init)
-                        row = {"tf": tf, "ob": float(ob), "os": float(os_), "f_hi": float(f_hi), "f_lo": float(f_lo),
-                               "atr_mult": float(am), "tp_r": float(tp), "n_signals": len(signals),
-                               "split_time": split, "ruined": bool(res.ruined), "ruin_time": res.ruin_time,
-                               "oversized_share": float(tr["oversized"].astype(bool).mean()) if len(tr) else 0.0,
-                               "capped_share": float(tr["capped"].astype(bool).mean()) if len(tr) else 0.0}
-                        row.update(full)
-                        row.update({f"is_{k}": is_m[k] for k in SPLIT_KEYS})
-                        row.update({f"oos_{k}": oos_m[k] for k in SPLIT_KEYS})
-                        rows.append(row)
-                        if progress:
-                            progress(len(rows), total)
+        for rf_len in grid.rsi_fast:
+            for ob, os_ in grid.rsi_slow_levels:
+                for f_hi, f_lo in grid.rsi_fast_levels:
+                    for am in grid.atr_mult:
+                        params = make_params(base, ob, os_, f_hi, f_lo, am, rsi_fast=rf_len)
+                        signals = run_strategy(bars, params)
+                        for tp in grid.tp_r:
+                            res = run_backtest(bars, signals, float(tp), spec, costs, sizing, concurrency)
+                            tr = res.trades
+                            n_blocked = int((res.skipped["reason"] == "blocked").sum()) if len(res.skipped) else 0
+                            full = compute_metrics(tr, res.equity, init, n_blocked=n_blocked, n_bars=n_bars)
+                            is_tr = tr[tr["entry_time"] < split]
+                            oos_tr = tr[tr["entry_time"] >= split]
+                            eq = res.equity
+                            is_m = _segment_metrics(is_tr, eq[eq.index < split], init)
+                            oos_m = _segment_metrics(oos_tr, eq[eq.index >= split], init)
+                            row = {"tf": tf, "rsi_fast": int(rf_len), "ob": float(ob), "os": float(os_),
+                                   "f_hi": float(f_hi), "f_lo": float(f_lo),
+                                   "atr_mult": float(am), "tp_r": float(tp), "n_signals": len(signals),
+                                   "split_time": split, "ruined": bool(res.ruined), "ruin_time": res.ruin_time,
+                                   "oversized_share": float(tr["oversized"].astype(bool).mean()) if len(tr) else 0.0,
+                                   "capped_share": float(tr["capped"].astype(bool).mean()) if len(tr) else 0.0}
+                            row.update(full)
+                            row.update({f"is_{k}": is_m[k] for k in SPLIT_KEYS})
+                            row.update({f"oos_{k}": oos_m[k] for k in SPLIT_KEYS})
+                            rows.append(row)
+                            if progress:
+                                progress(len(rows), total)
     df = pd.DataFrame(rows)
     df["ruin_time"] = pd.to_datetime(df["ruin_time"], utc=True)   # NaT where the run survived
     df = add_robustness(df, grid)
@@ -126,9 +135,9 @@ def run_optimization(bars_by_tf: dict[str, Bars], spec_by_tf: dict[str, SymbolSp
 def add_robustness(df: pd.DataFrame, grid: GridSpec) -> pd.DataFrame:
     """Add `robust_r` / `robust_ratio` (neighbourhood plateau) and `grid_edge`.
 
-    Neighbours are the combos with the same RSI level set (all four levels — grouping on
-    `ob`/`f_hi` alone silently pooled different `os`/`f_lo` sets) that sit within one grid
-    step of this combo in `tp_r` and `atr_mult`. Ruined combos are excluded from the pool
+    Neighbours are the combos with the same fast-RSI length and the same RSI level set (all four
+    levels — grouping on `ob`/`f_hi` alone silently pooled different `os`/`f_lo` sets) that sit
+    within one grid step of this combo in `tp_r` and `atr_mult`. Ruined combos are excluded from the pool
     (their `is_avg_r` is not a sample of anything a live account could have earned) and get
     `robust_r = 0` themselves.
     """
@@ -140,7 +149,8 @@ def add_robustness(df: pd.DataFrame, grid: GridSpec) -> pd.DataFrame:
     vals = df["is_avg_r"].astype(float).to_numpy()
     ruined = _col(df, "ruined", False).astype(bool).to_numpy()
     robust = np.full(len(df), np.nan)
-    for _, g in df.groupby(ROBUST_KEYS, sort=False):
+    keys = [k for k in ROBUST_KEYS if k in df.columns]      # caller-built frames may predate a key
+    for _, g in df.groupby(keys, sort=False):
         idx = g.index.to_numpy()
         alive = idx[~ruined[idx]]
         for k in idx:
@@ -203,6 +213,13 @@ def _reason(r: pd.Series) -> str:
     return txt
 
 
+def _param_value(row: pd.Series, key: str):
+    """One recommended parameter, typed: `tf` stays a string, lengths int, levels float."""
+    if key == "tf":
+        return row[key]
+    return int(row[key]) if key in INT_KEY_COLS else float(row[key])
+
+
 def recommend(df: pd.DataFrame, min_trades: int = MIN_TRADES,
               min_oos_trades: int = MIN_OOS_TRADES) -> dict[str, dict | None]:
     """Top-1 combo per timeframe, or None when nothing clears the gates (spec §4.3).
@@ -230,6 +247,6 @@ def recommend(df: pd.DataFrame, min_trades: int = MIN_TRADES,
         score = (W_IS_AVG_R * _zscore(f["is_avg_r"].astype(float))
                  + W_ROBUST_R * _zscore(f["robust_r"].astype(float)))
         best = f.loc[score.idxmax()]
-        out[tf] = {"params": {k: (best[k] if k == "tf" else float(best[k])) for k in KEY_COLS},
+        out[tf] = {"params": {k: _param_value(best, k) for k in KEY_COLS},
                    "score": float(score.max()), "row": best.to_dict(), "reason": _reason(best)}
     return out
