@@ -15,7 +15,7 @@ import pandas as pd
 from ..bars import Bars
 from ..params import CostParams, SizingParams, SymbolSpec
 from ..sizing import lots_for_risk
-from ..strategy import Direction, Signal
+from ..signals import Direction, Signal
 
 TRADE_COLUMNS = ["entry_time", "exit_time", "direction", "variant", "tp_r", "entry_price", "exit_price",
                  "sl_price", "tp_price", "lots", "sl_dist", "risk_usd", "r_multiple", "pnl_usd",
@@ -78,7 +78,7 @@ def run_backtest(bars: Bars, signals: list[Signal], tp_r: float, spec: SymbolSpe
     pending: list[Signal] = []
     trades: list[dict] = []
     skipped: list[dict] = []
-    variant_name = signals[0].variant.value if signals else ""
+    variant_name = signals[0].variant if signals else ""
 
     def close_position(pos: Position, bar: int, price: float, reason: str) -> None:
         nonlocal equity
@@ -88,7 +88,7 @@ def run_backtest(bars: Bars, signals: list[Signal], tp_r: float, spec: SymbolSpe
         net = gross - pos.commission
         trades.append({
             "entry_time": tm[pos.entry_bar], "exit_time": tm[bar], "direction": pos.direction.name,
-            "variant": pos.signal.variant.value, "tp_r": tp_r, "entry_price": pos.entry_price,
+            "variant": pos.signal.variant, "tp_r": tp_r, "entry_price": pos.entry_price,
             "exit_price": price, "sl_price": pos.sl, "tp_price": pos.tp, "lots": pos.lots,
             "sl_dist": pos.sl_dist, "risk_usd": pos.risk_usd, "r_multiple": net / pos.risk_usd,
             "pnl_usd": net, "commission": pos.commission, "exit_reason": reason,
@@ -98,7 +98,7 @@ def run_backtest(bars: Bars, signals: list[Signal], tp_r: float, spec: SymbolSpe
 
     def skip(s: Signal, bar: int, reason: str) -> None:
         skipped.append({"time": tm[bar], "signal_time": tm[s.signal_bar], "direction": s.direction.name,
-                        "variant": s.variant.value, "reason": reason})
+                        "variant": s.variant, "reason": reason})
 
     for t in range(n):
         # 1. fills

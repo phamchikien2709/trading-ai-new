@@ -4,14 +4,14 @@ import pytest
 
 from rsi_fvg.backtest.engine import SKIPPED_COLUMNS, TRADE_COLUMNS, run_backtest
 from rsi_fvg.params import CostParams, SizingParams, SymbolSpec
-from rsi_fvg.strategy import Direction, Signal, Variant
+from rsi_fvg.signals import Direction, Signal
 
 SPEC = SymbolSpec(name="T", point=0.01, digits=2, contract_size=1.0, min_lot=0.01, max_lot=200.0, lot_step=0.01)
 COSTS = CostParams(spread_points=20, commission_per_lot_rt=0.0, slippage_points=0)   # spread 0.20
 SIZING = SizingParams(risk_pct=1.0, initial_equity=10_000.0)
 
 
-def sig(direction, bar, sl, variant=Variant.A, anchor=0):
+def sig(direction, bar, sl, variant="A", anchor=0):
     return Signal(direction=direction, variant=variant, signal_bar=bar, anchor_bar=anchor,
                   ref_price=0.0, sl_price=sl, bars_in_wait=1)
 
