@@ -66,6 +66,16 @@ Bổ sung của engine (`run_backtest`):
 - **Sizing flags**: `lots_for_risk` trả `(lots, oversized, capped)`. `oversized` = bị nâng lên `min_lot` (risk **cao hơn** cấu hình); `capped` = bị chặn bởi `max_lot` (risk **thấp hơn** cấu hình). Cả hai đi vào trade log.
 - **Sai lệch có chủ ý**: TP là limit fill nên **không** trừ slippage; SL và entry thì có.
 
+### 2.6 Variants V1–V3 (thêm sau lần chạy grid đầu)
+
+Bối cảnh: trên M5, SL của cấu trúc RSI(2) nằm quá sát giá (median $1.7 trên M1, $7.5 trên M15) và **mọi trục grid đều tốt dần về biên** — dấu hiệu tối ưu nằm ngoài grid. Ba biến thể dưới đây mở rộng vùng quét và thêm hai bộ lọc. Cả ba **mặc định TẮT** nên kết quả cũ tái lập nguyên trạng (grid mặc định vẫn 225 combo/TF).
+
+**V1 — `rsi_fast` thành trục grid.** `GridSpec.rsi_fast: tuple[int, ...] = (2,)`, `size()` nhân thêm. Vòng lặp đặt `rsi_fast` **ngoài** (ob, os) nên signal vẫn tính một lần cho mỗi (rsi_fast, ob/os, f_hi/f_lo, atr_mult) và engine một lần cho mỗi `tp_r`. `KEY_COLS = [tf, rsi_fast, ob, os, f_hi, f_lo, atr_mult, tp_r]`; `ROBUST_KEYS` **có** `rsi_fast` — RSI(2) và RSI(5) cùng mốc là hai strategy khác nhau, không được gộp lân cận. `recommend()["params"]["rsi_fast"]` là `int`. Thử nghiệm: độ dài 5 là mức đầu tiên cho kết quả robust dương. CLI `--rsi-fast 2 5`.
+
+**V2 — lọc khoảng cách SL tối thiểu theo bội spread.** `run_backtest(..., min_sl_spread_mult=0.0)`: tại thời điểm fill, sau khi có `sl_dist`, nếu `min_sl_spread_mult > 0` và `sl_dist < min_sl_spread_mult × spread` (spread theo giá = `costs.spread_points × spec.point`) → bỏ tín hiệu với lý do `rejected_min_sl` vào frame `skipped`, **không** mở vị thế. State machine không bị ảnh hưởng (flag đã bị tiêu thụ ngay ở bước trigger). Grid ghi `min_sl_mult` và `n_rejected_min_sl`. CLI `--min-sl-mult`. Pine: input `minSlTicks` "Min SL distance (ticks, 0 = off)", xử lý như `blocked`.
+
+**V3 — cổng xu hướng RSI khung lớn.** `Rsi2SwingParams` thêm `htf_seconds = 0` (0 = tắt, 3600 = H1), `htf_rsi_len = 14`, `htf_level = 50.0`. `htf_rsi(bars, htf_seconds, period)`: gom bar theo `time // htf_seconds`; chuỗi close HTF = close **cuối** mỗi bucket; `rsi_wilder` trên chuỗi đó; **dịch một bucket** (bar trong bucket `b` đọc RSI của bucket `b−1`, tức bar HTF đã ĐÓNG); forward-fill về bar gốc; NaN trước bucket hoàn chỉnh đầu tiên. Nhờ vậy **không look-ahead** — có test prefix-invariance (`htf_rsi(bars[:k])[:k] == htf_rsi(bars)[:k]`). Cổng: khi `htf_seconds > 0`, BUY chỉ phát khi `htf[t] > htf_level`, SELL chỉ khi `htf[t] < htf_level`; NaN → trượt cổng. Trigger bị chặn **vẫn tiêu thụ flag** (state → IDLE, không Signal) — cùng ngữ nghĩa với `blocked`. Đây là công tắc mức run (đi theo `base`), **không** phải trục grid; grid ghi `htf_seconds`. CLI `--htf 3600`. Pine: `request.security(syminfo.tickerid, htfTf, ta.rsi(close, rsiSlowLen)[1], barmerge.gaps_off, barmerge.lookahead_on)` — idiom `[1]` + `lookahead_on` trả bar HTF đã đóng mà không repaint.
+
 ---
 
 ## 3. Metrics bổ sung (thêm vào `metrics.compute_metrics`)
@@ -139,8 +149,10 @@ Sections: (1) Recommendation; (2) Equity + drawdown cho combo khuyến nghị m�
 python scripts/run_rsi2_swing.py [--tf M5 M15 H1] [--risk 5] [--concurrency hedge|single]
                                  [--tp 1 1.5 2 3 4] [--atr-mult 0 0.5 1 1.5 2]
                                  [--rsi14 70/30 75/25 80/20] [--rsi2 85/15 90/10 95/5]
+                                 [--rsi-fast 2] [--min-sl-mult 0] [--htf 0]
                                  [--max-wait 0] [--offline]
 ```
+`--rsi-fast` (V1) là trục grid — nhiều giá trị nhân số combo. `--min-sl-mult` (V2) và `--htf` (V3, giây; 3600 = H1) là công tắc mức run, ghi vào `run_info` và mọi dòng grid.
 Data lấy từ cache `data/XAUUSDc_<TF>.parquet` (kéo bằng `scripts/fetch_data.py` nếu thiếu).
 
 ---

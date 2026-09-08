@@ -59,6 +59,20 @@ Strategy: `rsi_fvg/strategies/rsi2_swing.py` (port of `pine/rsi2_swing_strategy.
     python scripts/run_rsi2_swing.py --tf M15 --tp 2 3 --atr-mult 1 1.5 --rsi14 75/25 --rsi2 90/10
     python scripts/run_rsi2_swing.py --offline           # html with plotly.js embedded
 
+Three optional variants, all off by default (so the numbers above reproduce unchanged):
+
+    python scripts/run_rsi2_swing.py --rsi-fast 2 5      # scan the structure-RSI length too (grid x2)
+    python scripts/run_rsi2_swing.py --min-sl-mult 3     # skip a trade whose SL sits inside 3 spreads
+    python scripts/run_rsi2_swing.py --htf 3600          # H1 RSI14 trend gate: BUY > 50, SELL < 50
+
+`--rsi-fast` is a real grid axis (a second length doubles the combo count) and appears in the Grid sheet,
+the heatmap titles and the recommendation. `--min-sl-mult` refuses fills whose stop is closer than N
+spreads to the entry — the RSI(2) swing puts it a median $1.7 away on M1, inside the noise the spread
+itself makes — and logs them as `rejected_min_sl` in `skipped_<TF>.csv`. `--htf` (seconds; 3600 = H1)
+takes a signal only when the last **completed** higher-timeframe RSI agrees with its direction; a gated-out
+trigger still consumes its flag, so one RSI14 cross is still at most one trade. Both switches are recorded
+on every grid row (`min_sl_mult`, `n_rejected_min_sl`, `htf_seconds`) and in the Params sheet.
+
 Output `results/rsi2_swing/<timestamp>/`:
 - `report_<symbol>.xlsx` — Summary (recommendation + run config), Grid (all combos, IS/OOS, robustness, flags),
   Trades_<TF>, Monthly_<TF>, Equity_<TF> for recommended combos, Params.
