@@ -92,6 +92,9 @@ def test_optimize_cli_runs_rsi2_ema_swing(tmp_path):
                         "--data-dir", str(data_dir), "--out", str(out)],
                        cwd=ROOT, capture_output=True, text=True, timeout=600)
     assert r.returncode == 0, r.stdout + r.stderr
+    # A crash AFTER the files are written still exits 0-ish in spirit: the printed block is the
+    # only proof the run reached its end (this is how KeyError: 'ob' shipped).
+    assert "=== Recommendation ===" in r.stdout
     folders = list((out).glob("*"))
     assert len(folders) == 1
     produced = {p.name for p in folders[0].iterdir()}
@@ -115,6 +118,7 @@ def test_optimize_cli_runs_rsi2_swing_too(tmp_path):
                         "--data-dir", str(data_dir), "--out", str(out)],
                        cwd=ROOT, capture_output=True, text=True, timeout=600)
     assert r.returncode == 0, r.stdout + r.stderr
+    assert "=== Recommendation ===" in r.stdout
     head = (next((out).glob("*")) / "grid.csv").read_text(encoding="utf-8").splitlines()[0].split(",")
     assert head[:8] == ["tf", "rsi_fast", "ob", "os", "f_hi", "f_lo", "atr_mult", "tp_r"]
 
@@ -144,8 +148,40 @@ def test_optimize_cli_honours_an_explicit_non_default_symbol(tmp_path):
                         "--data-dir", str(data_dir), "--out", str(out)],
                        cwd=ROOT, capture_output=True, text=True, timeout=600)
     assert r.returncode == 0, r.stdout + r.stderr
+    assert "=== Recommendation ===" in r.stdout
     produced = {p.name for p in next(out.glob("*")).iterdir()}
     assert "report_XOVERRIDE.xlsx" in produced and "report_XOVERRIDE.html" in produced
+
+
+def test_optimize_cli_rejects_an_empty_grid(tmp_path):
+    """E: a bare `--tp` yields [] -> tp_r=() -> a zero-row grid, which used to load all the
+    data first and then die with KeyError: 'ruin_time' on the empty frame."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_cache(data_dir)
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "optimize.py"),
+                        "--strategy", "rsi2_ema_swing", "--tf", "M5", "--tp",
+                        "--data-dir", str(data_dir), "--out", str(tmp_path / "r")],
+                       cwd=ROOT, capture_output=True, text=True, timeout=300)
+    assert r.returncode != 0
+    combined = r.stdout + r.stderr
+    assert "empty grid" in combined and "Traceback" not in combined
+
+
+def test_optimize_cli_rejects_a_repeated_axis(tmp_path):
+    """F: `dict(...)` kept only the last value, so --axis ema=20/100 --axis ema=50/200 ran one
+    pair instead of two — a silently smaller grid, never an error."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_cache(data_dir)
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "optimize.py"),
+                        "--strategy", "rsi2_ema_swing", "--tf", "M5",
+                        "--axis", "ema=20/100", "--axis", "ema=50/200",
+                        "--data-dir", str(data_dir), "--out", str(tmp_path / "r")],
+                       cwd=ROOT, capture_output=True, text=True, timeout=300)
+    assert r.returncode != 0
+    combined = r.stdout + r.stderr
+    assert "ema" in combined and "Traceback" not in combined
 
 
 def test_optimize_cli_rejects_malformed_axis_value(tmp_path):

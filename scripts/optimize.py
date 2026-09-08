@@ -95,14 +95,23 @@ def main() -> int:
         print(f"  tp_r       -> default {adapter.default_tp_r}")
         return 0
 
+    axes: dict[str, tuple] = {}
     try:
-        axes = dict(parse_axis(t) for t in a.axis)
+        for text in a.axis:
+            name, values = parse_axis(text)
+            # dict() would silently keep only the last one, quietly shrinking the grid.
+            if name in axes:
+                ap.error(f"axis {name!r} given more than once; list every value in one "
+                         f"--axis {name}=v1,v2")
+            axes[name] = values
     except argparse.ArgumentTypeError as e:
         ap.error(str(e))
     try:
         grid = GridSpec.for_strategy(adapter, axes=axes or None, tp_r=a.tp)   # raises KeyError on a bad axis
     except KeyError as e:
         ap.error(str(e))
+    if grid.size() == 0:
+        ap.error("empty grid: every axis and --tp need at least one value")
     cfg = load_config(a.config)
     symbol = a.symbol or cfg.symbol
     tfs = a.tf or cfg.timeframes
@@ -149,7 +158,10 @@ def main() -> int:
                 "concurrency": a.concurrency, "spread_points": cfg.costs.spread_points,
                 "commission_per_lot_rt": cfg.costs.commission_per_lot_rt,
                 "slippage_points": cfg.costs.slippage_points, "is_frac": a.is_frac,
-                "min_sl_mult": a.min_sl_mult, "htf_seconds": a.htf, "max_wait": a.max_wait,
+                "min_sl_mult": a.min_sl_mult, "htf_seconds": a.htf,
+                # build_base() skips max_wait for params classes without the field, so reporting
+                # it unconditionally advertised a knob rsi2_ema_swing does not have.
+                **({"max_wait": a.max_wait} if "max_wait" in {f.name for f in fields(adapter.params_cls)} else {}),
                 "grid": {**{k: list(v) for k, v in grid.axes.items()}, "tp_r": list(grid.tp_r)},
                 "git_hash": _git_hash(), "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
 
