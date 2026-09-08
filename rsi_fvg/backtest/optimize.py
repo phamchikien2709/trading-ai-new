@@ -7,8 +7,9 @@ which filters produced it. The fast-RSI length (V1) *is* an axis: see `GridSpec.
 """
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass, replace
-from typing import Callable
+from typing import Callable, Iterator, Sequence
 
 import numpy as np
 import pandas as pd
@@ -16,14 +17,15 @@ import pandas as pd
 from ..bars import Bars
 from ..params import CostParams, SizingParams, SymbolSpec
 from ..signals import Signal
-from ..strategies.rsi2_swing import Rsi2SwingParams, run_strategy
+from ..strategies.registry import StrategyAdapter, get_adapter
+from ..strategies.rsi2_swing import Rsi2SwingParams   # still used by make_params' annotation
 from .engine import BacktestResult, run_backtest
 from .metrics import compute_metrics, equity_from_trades, max_drawdown
 
-KEY_COLS = ["tf", "rsi_fast", "ob", "os", "f_hi", "f_lo", "atr_mult", "tp_r"]
+# Column names now come from the strategy adapter; this constant is the rsi2_swing view of them,
+# kept because the delivered reports and CSVs use it.
+KEY_COLS = get_adapter("rsi2_swing").full_key_cols()
 SPLIT_KEYS = ("n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct", "net_pnl", "expectancy_usd")
-ROBUST_KEYS = ["tf", "rsi_fast", "ob", "os", "f_hi", "f_lo"]
-INT_KEY_COLS = ("rsi_fast",)
 
 # Recommendation gates (spec §4.3). A combo has to be profitable in cash, not just in R:
 # 107 of 675 combos in the first full run had avg_r > 0 while losing money, and the delivered
@@ -42,18 +44,37 @@ W_ROBUST_R = 0.4
 
 @dataclass(frozen=True)
 class GridSpec:
-    tp_r: tuple[float, ...] = (1.0, 1.5, 2.0, 3.0, 4.0)
-    atr_mult: tuple[float, ...] = (0.0, 0.5, 1.0, 1.5, 2.0)
-    rsi_slow_levels: tuple[tuple[float, float], ...] = ((70.0, 30.0), (75.0, 25.0), (80.0, 20.0))
-    rsi_fast_levels: tuple[tuple[float, float], ...] = ((85.0, 15.0), (90.0, 10.0), (95.0, 5.0))
-    # V1: the structure-RSI *length* is an axis too. On M5 the RSI(2) stop sits within a few
-    # spreads of price; a longer fast RSI marks wider swings, and length 5 was the first
-    # setting with positively-robust results.
-    rsi_fast: tuple[int, ...] = (2,)
+    """Grid as {axis name: values} plus the TP axis (spec §3.2).
+
+    An axis value is a scalar (one column) or a tuple (several, e.g. `rsi2 = (90, 10)`).
+    Signals are computed once per axis combination; the engine runs once per `tp_r`, because
+    TP is the only axis that does not change the signal.
+    """
+
+    axes: dict[str, tuple]
+    tp_r: tuple[float, ...]
+
+    @classmethod
+    def for_strategy(cls, adapter: StrategyAdapter, axes: dict | None = None,
+                     tp_r: Sequence | None = None) -> "GridSpec":
+        known = {a.name for a in adapter.axes}
+        unknown = set(axes or {}) - known
+        if unknown:
+            raise KeyError(f"{adapter.name}: unknown axis {sorted(unknown)}; have {sorted(known)}")
+        merged = {k: tuple(v) for k, v in adapter.default_axes.items()}
+        merged.update({k: tuple(v) for k, v in (axes or {}).items()})
+        return cls(axes=merged, tp_r=tuple(float(x) for x in (tp_r if tp_r is not None else adapter.default_tp_r)))
 
     def size(self) -> int:
-        return (len(self.tp_r) * len(self.atr_mult) * len(self.rsi_slow_levels)
-                * len(self.rsi_fast_levels) * len(self.rsi_fast))
+        n = len(self.tp_r)
+        for values in self.axes.values():
+            n *= len(values)
+        return n
+
+    def combos(self, adapter: StrategyAdapter) -> Iterator[dict]:
+        names = [a.name for a in adapter.axes]
+        for values in itertools.product(*(self.axes[n] for n in names)):
+            yield dict(zip(names, values))
 
 
 def split_time(bars: Bars, is_frac: float) -> pd.Timestamp:
@@ -68,10 +89,10 @@ def make_params(base: Rsi2SwingParams, ob: float, os_: float, f_hi: float, f_lo:
     return params if rsi_fast is None else replace(params, rsi_fast=int(rsi_fast))
 
 
-def run_single(bars: Bars, spec: SymbolSpec, params: Rsi2SwingParams, tp_r: float, costs: CostParams,
-               sizing: SizingParams, concurrency: str,
+def run_single(strategy: StrategyAdapter, bars: Bars, spec: SymbolSpec, params, tp_r: float,
+               costs: CostParams, sizing: SizingParams, concurrency: str,
                min_sl_spread_mult: float = 0.0) -> tuple[list[Signal], BacktestResult]:
-    signals = run_strategy(bars, params)
+    signals = strategy.run(bars, params)
     return signals, run_backtest(bars, signals, float(tp_r), spec, costs, sizing, concurrency,
                                  min_sl_spread_mult=min_sl_spread_mult)
 
@@ -95,9 +116,10 @@ def _segment_metrics(trades_seg: pd.DataFrame, equity_slice: pd.Series, init: fl
     return m
 
 
-def run_optimization(bars_by_tf: dict[str, Bars], spec_by_tf: dict[str, SymbolSpec], base: Rsi2SwingParams,
-                     grid: GridSpec, costs: CostParams, sizing: SizingParams, concurrency: str = "hedge",
-                     is_frac: float = 0.7, progress: Callable[[int, int], None] | None = None,
+def run_optimization(strategy: StrategyAdapter, bars_by_tf: dict[str, Bars],
+                     spec_by_tf: dict[str, SymbolSpec], base, grid: GridSpec, costs: CostParams,
+                     sizing: SizingParams, concurrency: str = "hedge", is_frac: float = 0.7,
+                     progress: Callable[[int, int], None] | None = None,
                      min_sl_spread_mult: float = 0.0) -> pd.DataFrame:
     total = grid.size() * len(bars_by_tf)
     init = sizing.initial_equity
@@ -106,64 +128,60 @@ def run_optimization(bars_by_tf: dict[str, Bars], spec_by_tf: dict[str, SymbolSp
         split = split_time(bars, is_frac)
         n_bars = len(bars)
         spec = spec_by_tf[tf]
-        for rf_len in grid.rsi_fast:
-            for ob, os_ in grid.rsi_slow_levels:
-                for f_hi, f_lo in grid.rsi_fast_levels:
-                    for am in grid.atr_mult:
-                        params = make_params(base, ob, os_, f_hi, f_lo, am, rsi_fast=rf_len)
-                        signals = run_strategy(bars, params)
-                        for tp in grid.tp_r:
-                            res = run_backtest(bars, signals, float(tp), spec, costs, sizing, concurrency,
-                                               min_sl_spread_mult=min_sl_spread_mult)
-                            tr = res.trades
-                            reasons = res.skipped["reason"] if len(res.skipped) else None
-                            n_blocked = int((reasons == "blocked").sum()) if reasons is not None else 0
-                            n_min_sl = int((reasons == "rejected_min_sl").sum()) if reasons is not None else 0
-                            full = compute_metrics(tr, res.equity, init, n_blocked=n_blocked, n_bars=n_bars)
-                            is_tr = tr[tr["entry_time"] < split]
-                            oos_tr = tr[tr["entry_time"] >= split]
-                            eq = res.equity
-                            is_m = _segment_metrics(is_tr, eq[eq.index < split], init)
-                            oos_m = _segment_metrics(oos_tr, eq[eq.index >= split], init)
-                            row = {"tf": tf, "rsi_fast": int(rf_len), "ob": float(ob), "os": float(os_),
-                                   "f_hi": float(f_hi), "f_lo": float(f_lo),
-                                   "atr_mult": float(am), "tp_r": float(tp), "n_signals": len(signals),
-                                   "min_sl_mult": float(min_sl_spread_mult), "n_rejected_min_sl": n_min_sl,
-                                   "htf_seconds": int(base.htf_seconds),
-                                   "split_time": split, "ruined": bool(res.ruined), "ruin_time": res.ruin_time,
-                                   "oversized_share": float(tr["oversized"].astype(bool).mean()) if len(tr) else 0.0,
-                                   "capped_share": float(tr["capped"].astype(bool).mean()) if len(tr) else 0.0}
-                            row.update(full)
-                            row.update({f"is_{k}": is_m[k] for k in SPLIT_KEYS})
-                            row.update({f"oos_{k}": oos_m[k] for k in SPLIT_KEYS})
-                            rows.append(row)
-                            if progress:
-                                progress(len(rows), total)
+        for axis_values in grid.combos(strategy):
+            params = strategy.make_params(base, axis_values)
+            signals = strategy.run(bars, params)
+            key_cols = strategy.columns_for(axis_values)
+            for tp in grid.tp_r:
+                res = run_backtest(bars, signals, float(tp), spec, costs, sizing, concurrency,
+                                   min_sl_spread_mult=min_sl_spread_mult)
+                tr = res.trades
+                reasons = res.skipped["reason"] if len(res.skipped) else None
+                n_blocked = int((reasons == "blocked").sum()) if reasons is not None else 0
+                n_min_sl = int((reasons == "rejected_min_sl").sum()) if reasons is not None else 0
+                full = compute_metrics(tr, res.equity, init, n_blocked=n_blocked, n_bars=n_bars)
+                is_tr = tr[tr["entry_time"] < split]
+                oos_tr = tr[tr["entry_time"] >= split]
+                eq = res.equity
+                is_m = _segment_metrics(is_tr, eq[eq.index < split], init)
+                oos_m = _segment_metrics(oos_tr, eq[eq.index >= split], init)
+                row = {"tf": tf, **key_cols, "tp_r": float(tp), "n_signals": len(signals),
+                       "min_sl_mult": float(min_sl_spread_mult), "n_rejected_min_sl": n_min_sl,
+                       "htf_seconds": int(getattr(base, "htf_seconds", 0)),
+                       "split_time": split, "ruined": bool(res.ruined), "ruin_time": res.ruin_time,
+                       "oversized_share": float(tr["oversized"].astype(bool).mean()) if len(tr) else 0.0,
+                       "capped_share": float(tr["capped"].astype(bool).mean()) if len(tr) else 0.0}
+                row.update(full)
+                row.update({f"is_{k}": is_m[k] for k in SPLIT_KEYS})
+                row.update({f"oos_{k}": oos_m[k] for k in SPLIT_KEYS})
+                rows.append(row)
+                if progress:
+                    progress(len(rows), total)
     df = pd.DataFrame(rows)
     df["ruin_time"] = pd.to_datetime(df["ruin_time"], utc=True)   # NaT where the run survived
-    df = add_robustness(df, grid)
+    df = add_robustness(df, grid, strategy)
     df["flags"] = df.apply(lambda r: ";".join(compute_flags(r)), axis=1)
     return df
 
 
-def add_robustness(df: pd.DataFrame, grid: GridSpec) -> pd.DataFrame:
+def add_robustness(df: pd.DataFrame, grid: GridSpec, strategy: StrategyAdapter) -> pd.DataFrame:
     """Add `robust_r` / `robust_ratio` (neighbourhood plateau) and `grid_edge`.
 
-    Neighbours are the combos with the same fast-RSI length and the same RSI level set (all four
-    levels — grouping on `ob`/`f_hi` alone silently pooled different `os`/`f_lo` sets) that sit
-    within one grid step of this combo in `tp_r` and `atr_mult`. Ruined combos are excluded from the pool
-    (their `is_avg_r` is not a sample of anything a live account could have earned) and get
+    Neighbours share every grid axis except `tp_r` and the strategy's robust axis (`atr_mult`),
+    and sit within one grid step of this combo on those two. Ruined combos are excluded from the
+    pool (their `is_avg_r` is not a sample of anything a live account could have earned) and get
     `robust_r = 0` themselves.
     """
     df = df.reset_index(drop=True).copy()
+    robust_col = strategy.axis(strategy.robust_axis).columns[0]
     tp_idx = {float(v): i for i, v in enumerate(grid.tp_r)}
-    am_idx = {float(v): i for i, v in enumerate(grid.atr_mult)}
+    am_idx = {float(v): i for i, v in enumerate(grid.axes[strategy.robust_axis])}
     ti = df["tp_r"].astype(float).map(tp_idx).to_numpy()
-    ai = df["atr_mult"].astype(float).map(am_idx).to_numpy()
+    ai = df[robust_col].astype(float).map(am_idx).to_numpy()
     vals = df["is_avg_r"].astype(float).to_numpy()
     ruined = _col(df, "ruined", False).astype(bool).to_numpy()
     robust = np.full(len(df), np.nan)
-    keys = [k for k in ROBUST_KEYS if k in df.columns]      # caller-built frames may predate a key
+    keys = [k for k in strategy.robust_cols if k in df.columns]   # caller-built frames may predate a key
     for _, g in df.groupby(keys, sort=False):
         idx = g.index.to_numpy()
         alive = idx[~ruined[idx]]
@@ -179,8 +197,9 @@ def add_robustness(df: pd.DataFrame, grid: GridSpec) -> pd.DataFrame:
         ratio = np.where(vals > 0, np.clip(df["robust_r"].to_numpy() / vals, 0.0, 1.5), 0.0)
     df["robust_ratio"] = ratio
     edge_tp = {float(grid.tp_r[0]), float(grid.tp_r[-1])}
-    edge_am = {float(grid.atr_mult[0]), float(grid.atr_mult[-1])}
-    df["grid_edge"] = (df["tp_r"].astype(float).isin(edge_tp) | df["atr_mult"].astype(float).isin(edge_am))
+    am_values = grid.axes[strategy.robust_axis]
+    edge_am = {float(am_values[0]), float(am_values[-1])}
+    df["grid_edge"] = (df["tp_r"].astype(float).isin(edge_tp) | df[robust_col].astype(float).isin(edge_am))
     return df
 
 
@@ -227,14 +246,14 @@ def _reason(r: pd.Series) -> str:
     return txt
 
 
-def _param_value(row: pd.Series, key: str):
+def _param_value(row: pd.Series, key: str, int_cols: tuple[str, ...]):
     """One recommended parameter, typed: `tf` stays a string, lengths int, levels float."""
     if key == "tf":
         return row[key]
-    return int(row[key]) if key in INT_KEY_COLS else float(row[key])
+    return int(row[key]) if key in int_cols else float(row[key])
 
 
-def recommend(df: pd.DataFrame, min_trades: int = MIN_TRADES,
+def recommend(df: pd.DataFrame, strategy: StrategyAdapter, min_trades: int = MIN_TRADES,
               min_oos_trades: int = MIN_OOS_TRADES) -> dict[str, dict | None]:
     """Top-1 combo per timeframe, or None when nothing clears the gates (spec §4.3).
 
@@ -261,6 +280,6 @@ def recommend(df: pd.DataFrame, min_trades: int = MIN_TRADES,
         score = (W_IS_AVG_R * _zscore(f["is_avg_r"].astype(float))
                  + W_ROBUST_R * _zscore(f["robust_r"].astype(float)))
         best = f.loc[score.idxmax()]
-        out[tf] = {"params": {k: _param_value(best, k) for k in KEY_COLS},
+        out[tf] = {"params": {k: _param_value(best, k, strategy.int_cols) for k in strategy.full_key_cols()},
                    "score": float(score.max()), "row": best.to_dict(), "reason": _reason(best)}
     return out

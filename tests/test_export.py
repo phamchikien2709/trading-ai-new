@@ -8,12 +8,15 @@ from rsi_fvg.backtest.export import _equity_frame, write_csvs, write_html, write
 from rsi_fvg.backtest.optimize import GridSpec, recommend, run_optimization, run_single
 from rsi_fvg.bars import Bars
 from rsi_fvg.params import CostParams, SizingParams, SymbolSpec
+from rsi_fvg.strategies.registry import get_adapter
 from rsi_fvg.strategies.rsi2_swing import Rsi2SwingParams
 
+ADAPTER = get_adapter("rsi2_swing")
 SPEC = SymbolSpec(name="T", point=0.01, digits=2, contract_size=1.0)
 COSTS = CostParams(spread_points=20, commission_per_lot_rt=0.0, slippage_points=0)
 SIZING = SizingParams(risk_pct=5.0, initial_equity=10_000.0)
-SMALL = GridSpec(tp_r=(1.0, 2.0), atr_mult=(0.5, 1.0), rsi_slow_levels=((75.0, 25.0),), rsi_fast_levels=((90.0, 10.0),))
+SMALL = GridSpec.for_strategy(ADAPTER, axes={"rsi14": ((75.0, 25.0),), "rsi2": ((90.0, 10.0),),
+                                             "atr_mult": (0.5, 1.0)}, tp_r=(1.0, 2.0))
 
 
 def _bars(n=6000, seed=5):
@@ -27,10 +30,10 @@ def _bars(n=6000, seed=5):
 
 def _fixture():
     b = _bars()
-    df = run_optimization({"M5": b}, {"M5": SPEC}, Rsi2SwingParams(), SMALL, COSTS, SIZING)
-    rec = recommend(df)
+    df = run_optimization(ADAPTER, {"M5": b}, {"M5": SPEC}, Rsi2SwingParams(), SMALL, COSTS, SIZING)
+    rec = recommend(df, ADAPTER)
     row = df.iloc[0]
-    _, res = run_single(b, SPEC, Rsi2SwingParams(atr_mult=row.atr_mult), row.tp_r, COSTS, SIZING, "hedge")
+    _, res = run_single(ADAPTER, b, SPEC, Rsi2SwingParams(atr_mult=row.atr_mult), row.tp_r, COSTS, SIZING, "hedge")
     info = {"symbol": "T", "timeframes": ["M5"], "data_range": {"M5": ("2023-11-14", "2023-12-05")},
             "initial_equity": 10_000, "risk_pct": 5.0, "concurrency": "hedge", "spread_points": 20,
             "commission_per_lot_rt": 0.0, "slippage_points": 0, "is_frac": 0.7,
@@ -95,7 +98,7 @@ def _rec_for(df):
     never clear the profit gates, so the 'recommended' branch needs a hand-built pick)."""
     from rsi_fvg.backtest.optimize import KEY_COLS, _param_value, _reason
     best = df.iloc[0]
-    return {"M5": {"params": {k: _param_value(best, k) for k in KEY_COLS},
+    return {"M5": {"params": {k: _param_value(best, k, ADAPTER.int_cols) for k in KEY_COLS},
                    "score": 1.23, "row": best.to_dict(), "reason": _reason(best)}}
 
 

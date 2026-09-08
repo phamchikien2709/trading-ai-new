@@ -60,3 +60,12 @@ def test_registry_run_is_the_strategy_entry_point():
     from rsi_fvg.strategies import rsi2_swing
     assert STRATEGIES["rsi2_swing"].run is rsi2_swing.run_strategy
     assert STRATEGIES["rsi2_swing"].params_cls is Rsi2SwingParams
+
+
+def test_robust_axis_must_be_single_column():
+    from rsi_fvg.strategies.registry import Axis, StrategyAdapter
+    from rsi_fvg.strategies.rsi2_swing import Rsi2SwingParams, run_strategy
+    with pytest.raises(ValueError):
+        StrategyAdapter(name="bad", axes=(Axis("pair", ("a", "b"), ("x", "y")),),
+                        default_axes={"pair": ((1, 2),)}, default_tp_r=(1.0,),
+                        params_cls=Rsi2SwingParams, run=run_strategy, robust_axis="pair")

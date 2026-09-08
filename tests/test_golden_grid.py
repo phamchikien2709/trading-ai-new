@@ -53,10 +53,13 @@ def normalise(df: pd.DataFrame) -> pd.DataFrame:
 def build_grid_df() -> pd.DataFrame:
     """Run the optimizer the way the fixture was produced."""
     from rsi_fvg.backtest.optimize import GridSpec, run_optimization
+    from rsi_fvg.strategies.registry import get_adapter
+    adapter = get_adapter("rsi2_swing")
     bars_by_tf, spec_by_tf, base, ax = golden_inputs()
-    grid = GridSpec(tp_r=ax["tp_r"], atr_mult=ax["atr_mult"], rsi_fast=ax["rsi_fast"],
-                    rsi_slow_levels=ax["rsi_slow_levels"], rsi_fast_levels=ax["rsi_fast_levels"])
-    return run_optimization(bars_by_tf, spec_by_tf, base, grid, COSTS, SIZING, "hedge")
+    grid = GridSpec.for_strategy(adapter, axes={"rsi_fast": ax["rsi_fast"], "rsi14": ax["rsi_slow_levels"],
+                                                "rsi2": ax["rsi_fast_levels"], "atr_mult": ax["atr_mult"]},
+                                 tp_r=ax["tp_r"])
+    return run_optimization(adapter, bars_by_tf, spec_by_tf, base, grid, COSTS, SIZING, "hedge")
 
 
 def test_golden_fixture_exists():

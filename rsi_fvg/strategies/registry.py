@@ -59,6 +59,10 @@ class StrategyAdapter:
     robust_axis: str = "atr_mult"
     panel_title: Callable[[dict], str] | None = None
 
+    def __post_init__(self) -> None:
+        if len(self.axis(self.robust_axis).columns) != 1:
+            raise ValueError(f"{self.name}: robust axis {self.robust_axis!r} must map to exactly one column")
+
     def axis(self, name: str) -> Axis:
         for a in self.axes:
             if a.name == name:

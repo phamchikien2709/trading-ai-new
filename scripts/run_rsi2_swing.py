@@ -22,12 +22,15 @@ sys.path.insert(0, str(ROOT))
 import pandas as pd  # noqa: E402
 
 from rsi_fvg.backtest.export import write_csvs, write_html, write_xlsx  # noqa: E402
-from rsi_fvg.backtest.optimize import (FILTER_TEXT, KEY_COLS, GridSpec, make_params,  # noqa: E402
+from rsi_fvg.backtest.optimize import (FILTER_TEXT, GridSpec, make_params,  # noqa: E402
                                        recommend, run_optimization, run_single)
 from rsi_fvg.bars import Bars  # noqa: E402
 from rsi_fvg.data.mt5_loader import load_or_fetch  # noqa: E402
 from rsi_fvg.params import load_config  # noqa: E402
+from rsi_fvg.strategies.registry import get_adapter  # noqa: E402
 from rsi_fvg.strategies.rsi2_swing import Rsi2SwingParams  # noqa: E402
+
+ADAPTER = get_adapter("rsi2_swing")
 
 
 def _pairs(values: list[str]) -> tuple[tuple[float, float], ...]:
@@ -84,9 +87,10 @@ def main() -> int:
     symbol = a.symbol or cfg.symbol
     tfs = a.tf or cfg.timeframes
     sizing = replace(cfg.sizing, risk_pct=a.risk)
-    grid = GridSpec(tp_r=tuple(float(x) for x in a.tp), atr_mult=tuple(float(x) for x in a.atr_mult),
-                    rsi_slow_levels=_pairs(a.rsi14), rsi_fast_levels=_pairs(a.rsi2),
-                    rsi_fast=tuple(int(x) for x in a.rsi_fast))
+    grid = GridSpec.for_strategy(ADAPTER, axes={"rsi_fast": tuple(int(x) for x in a.rsi_fast),
+                                                "rsi14": _pairs(a.rsi14), "rsi2": _pairs(a.rsi2),
+                                                "atr_mult": tuple(float(x) for x in a.atr_mult)},
+                                 tp_r=a.tp)
     base = Rsi2SwingParams(max_wait=a.max_wait, htf_seconds=a.htf)
 
     bars_by_tf, spec_by_tf, ranges = {}, {}, {}
@@ -109,9 +113,9 @@ def main() -> int:
             print(f"  {done}/{total} ({pct}%)  {time.time() - t0:.0f}s", flush=True)
 
     print(f"grid: {grid.size()} combos x {len(tfs)} TF")
-    grid_df = run_optimization(bars_by_tf, spec_by_tf, base, grid, cfg.costs, sizing, a.concurrency,
+    grid_df = run_optimization(ADAPTER, bars_by_tf, spec_by_tf, base, grid, cfg.costs, sizing, a.concurrency,
                                is_frac=a.is_frac, progress=progress, min_sl_spread_mult=a.min_sl_mult)
-    rec = recommend(grid_df)
+    rec = recommend(grid_df, ADAPTER)
 
     rec_results = {}
     for tf, r in rec.items():
@@ -120,8 +124,8 @@ def main() -> int:
         p = r["params"]
         params = make_params(base, p["ob"], p["os"], p["f_hi"], p["f_lo"], p["atr_mult"],
                              rsi_fast=int(p["rsi_fast"]))
-        _, res = run_single(bars_by_tf[tf], spec_by_tf[tf], params, p["tp_r"], cfg.costs, sizing, a.concurrency,
-                            min_sl_spread_mult=a.min_sl_mult)
+        _, res = run_single(ADAPTER, bars_by_tf[tf], spec_by_tf[tf], params, p["tp_r"], cfg.costs, sizing,
+                            a.concurrency, min_sl_spread_mult=a.min_sl_mult)
         rec_results[tf] = res
 
     run_info = {"symbol": symbol, "timeframes": tfs, "data_range": ranges, "initial_equity": sizing.initial_equity,
@@ -129,8 +133,9 @@ def main() -> int:
                 "commission_per_lot_rt": cfg.costs.commission_per_lot_rt, "slippage_points": cfg.costs.slippage_points,
                 "is_frac": a.is_frac, "max_wait": a.max_wait, "min_sl_mult": a.min_sl_mult,
                 "htf_seconds": a.htf,
-                "grid": {"tp_r": list(grid.tp_r), "atr_mult": list(grid.atr_mult), "rsi14": a.rsi14, "rsi2": a.rsi2,
-                         "rsi_fast": list(grid.rsi_fast)},
+                "grid": {"tp_r": list(grid.tp_r), "atr_mult": list(grid.axes["atr_mult"]), "rsi14": a.rsi14,
+                         "rsi2": a.rsi2, "rsi_fast": list(grid.axes["rsi_fast"])},
+                "strategy": "rsi2_swing",
                 "git_hash": _git_hash(), "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
 
     out_dir = Path(a.out) / datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -154,8 +159,8 @@ def main() -> int:
             print(f"     net ${row['net_pnl']:,.0f}  PF {row['profit_factor']:.2f}  "
                   f"max DD {row['max_dd_pct']:.1%}  capped {row.get('capped_share', 0.0):.0%}")
             print(f"     {r['reason']}")
-    cols = KEY_COLS + ["n_trades", "win_rate", "avg_r", "profit_factor", "net_pnl", "max_dd_pct",
-                       "is_avg_r", "oos_avg_r", "robust_r", "ruined", "flags"]
+    cols = ADAPTER.full_key_cols() + ["n_trades", "win_rate", "avg_r", "profit_factor", "net_pnl", "max_dd_pct",
+                                      "is_avg_r", "oos_avg_r", "robust_r", "ruined", "flags"]
     for tf, g in grid_df.groupby("tf", sort=False):
         # Ranked on what recommend() scores (IS avg R, then robustness); OOS is only a gate.
         print(f"\n--- {tf}: top 5 by IS avg R (then robust_r) ---")
