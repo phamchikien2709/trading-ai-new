@@ -102,6 +102,34 @@ def test_rejected_invalid_sl_when_open_gaps_below_sl(mk_bars):
     assert res.skipped.iloc[0].reason == "rejected_invalid_sl"
 
 
+def test_gap_through_tp_wins_even_when_bar_also_touches_sl(mk_bars):
+    # I4: buy filled 100.2, sl 90, tp 110.4. The bar opens above TP and its low reaches SL —
+    # the open is tested first, so this books TP at the open, not SL.
+    bars = mk_bars(o=[100, 100, 121, 121], h=[101, 101, 122, 122], l=[99, 99, 89, 120], c=[100, 100, 121, 121])
+    res = run_backtest(bars, [sig(Direction.BUY, 0, sl=90.0)], tp_r=1.0, spec=SPEC, costs=COSTS, sizing=SIZING)
+    tr = res.trades.iloc[0]
+    assert tr.tp_price == pytest.approx(110.4)
+    assert tr.exit_reason == "TP" and tr.exit_price == pytest.approx(121.0)
+
+
+def test_gap_through_sl_wins_when_open_is_below_sl(mk_bars):
+    # Mirror of the above: the open is already through SL, so SL books at the open.
+    bars = mk_bars(o=[100, 100, 85, 85], h=[101, 101, 122, 122], l=[99, 99, 84, 84], c=[100, 100, 85, 85])
+    res = run_backtest(bars, [sig(Direction.BUY, 0, sl=90.0)], tp_r=1.0, spec=SPEC, costs=COSTS, sizing=SIZING)
+    tr = res.trades.iloc[0]
+    assert tr.exit_reason == "SL" and tr.exit_price == pytest.approx(85.0)
+
+
+def test_sell_gap_through_tp_wins_on_ask_open(mk_bars):
+    # Sell fills at bid 100, sl 110, tp = 100 - 10 = 90. Ask open 80.2 is past TP while the
+    # ask high 122.2 is past SL -> TP at the ask open.
+    bars = mk_bars(o=[100, 100, 80, 80], h=[101, 101, 122, 81], l=[99, 99, 79, 79], c=[100, 100, 80, 80])
+    res = run_backtest(bars, [sig(Direction.SELL, 0, sl=110.0)], tp_r=1.0, spec=SPEC, costs=COSTS, sizing=SIZING)
+    tr = res.trades.iloc[0]
+    assert tr.tp_price == pytest.approx(90.0)
+    assert tr.exit_reason == "TP" and tr.exit_price == pytest.approx(80.2)
+
+
 def test_commission_and_oversized(mk_bars):
     bars = mk_bars(o=[100, 100, 100], h=[101, 101, 101], l=[99, 99, 99], c=[100, 100, 100])
     costs = CostParams(spread_points=0, commission_per_lot_rt=7.0, slippage_points=0)
@@ -115,8 +143,72 @@ def test_commission_and_oversized(mk_bars):
     assert res.equity.iloc[-1] == pytest.approx(5.0 - 0.07)
 
 
+BIG = SymbolSpec(name="T", point=0.01, digits=2, contract_size=1.0, min_lot=0.01, max_lot=1e6, lot_step=0.01)
+NOCOST = CostParams(spread_points=0, commission_per_lot_rt=0.0, slippage_points=0)
+
+
+def test_capped_flag_reaches_the_trade_log(mk_bars):
+    # risk 5% of 10k over a 10-point stop wants 50 lots; max_lot 5 clamps it.
+    spec = SymbolSpec(name="T", point=0.01, digits=2, contract_size=1.0, min_lot=0.01, max_lot=5.0, lot_step=0.01)
+    bars = mk_bars(o=[100, 100, 100], h=[101, 101, 101], l=[99, 99, 99], c=[100, 100, 100])
+    res = run_backtest(bars, [sig(Direction.BUY, 0, sl=90.0)], 3.0, spec, NOCOST, SizingParams(5.0, 10_000.0))
+    tr = res.trades.iloc[0]
+    assert tr.lots == 5.0 and bool(tr.capped) is True and bool(tr.oversized) is False
+    assert list(res.trades.columns) == TRADE_COLUMNS
+
+
+def test_ruin_stops_trading_and_flatlines_the_curve(mk_bars):
+    # 50% risk, every trade stops out: 10k -> 5k -> 2.5k -> 1.25k -> 625, which is under the
+    # 10% floor, so the run ends at that bar.
+    n = 8
+    bars = mk_bars(o=[100] * n, h=[101] * n, l=[85] * n, c=[100] * n)
+    sigs = [sig(Direction.BUY, b, sl=90.0) for b in range(n - 1)]
+    res = run_backtest(bars, sigs, 1.0, BIG, NOCOST, SizingParams(50.0, 10_000.0))
+    assert res.ruined is True
+    assert res.ruin_time == pd.Timestamp(bars.time[4], unit="s", tz="UTC")
+    assert len(res.trades) == 4                                   # nothing fills after ruin
+    assert (res.trades["exit_time"] <= res.ruin_time).all()
+    assert res.equity.iloc[4] == pytest.approx(625.0)
+    assert res.equity.iloc[4:].nunique() == 1                     # flat to the end
+    assert res.equity.min() > 0
+
+
+def test_ruin_force_closes_an_open_position(mk_bars):
+    # 80% risk. Bar 1 stops out (10k -> 2k). Bar 2 opens 160 lots and marks -1280 at the
+    # close without touching its stop, so marked equity 720 breaches the 1000 floor.
+    bars = mk_bars(o=[100, 100, 100, 100, 100], h=[101, 101, 101, 101, 101],
+                   l=[99, 85, 91, 99, 99], c=[100, 100, 92, 100, 100])
+    sigs = [sig(Direction.BUY, 0, sl=90.0), sig(Direction.BUY, 1, sl=90.0)]
+    res = run_backtest(bars, sigs, 1.0, BIG, NOCOST, SizingParams(80.0, 10_000.0))
+    assert res.ruined is True and res.ruin_time == pd.Timestamp(bars.time[2], unit="s", tz="UTC")
+    assert len(res.trades) == 2
+    last = res.trades.iloc[1]
+    assert last.exit_reason == "ruin"
+    assert last.lots == pytest.approx(160.0) and last.exit_price == pytest.approx(92.0)
+    assert res.equity.iloc[2] == pytest.approx(720.0)
+    assert res.equity.iloc[-1] == pytest.approx(720.0)
+
+
+def test_normal_run_is_not_ruined(mk_bars):
+    bars = mk_bars(o=[100, 100, 104, 104], h=[101, 101, 111, 105], l=[99, 99, 99.5, 103], c=[100, 100, 104, 104])
+    res = run_backtest(bars, [sig(Direction.BUY, 0, sl=90.0)], tp_r=1.0, spec=SPEC, costs=COSTS, sizing=SIZING)
+    assert res.ruined is False and res.ruin_time is None
+
+
+def test_ruin_floor_is_configurable(mk_bars):
+    n = 8
+    bars = mk_bars(o=[100] * n, h=[101] * n, l=[85] * n, c=[100] * n)
+    sigs = [sig(Direction.BUY, b, sl=90.0) for b in range(n - 1)]
+    # A 60% floor stops the same sequence one loss earlier (10k -> 5k, 5k > 6k is false).
+    high = run_backtest(bars, sigs, 1.0, BIG, NOCOST, SizingParams(50.0, 10_000.0), ruin_floor_pct=0.60)
+    assert high.ruined is True and len(high.trades) == 1
+    # A zero floor only trips on a wiped-out account, so this run keeps trading.
+    zero = run_backtest(bars, sigs, 1.0, BIG, NOCOST, SizingParams(50.0, 10_000.0), ruin_floor_pct=0.0)
+    assert zero.ruined is False and len(zero.trades) == 7
+
+
 def test_signal_on_last_bar_never_fills(mk_bars):
-    bars = mk_mk = mk_bars(o=[100, 100], h=[101, 101], l=[99, 99], c=[100, 100])
+    bars = mk_bars(o=[100, 100], h=[101, 101], l=[99, 99], c=[100, 100])
     res = run_backtest(bars, [sig(Direction.BUY, 1, sl=90.0)], 3.0, SPEC, COSTS, SIZING)
     assert len(res.trades) == 0 and len(res.skipped) == 0
     assert len(res.equity) == 2 and res.equity.iloc[-1] == 10_000.0

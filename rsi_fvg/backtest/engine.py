@@ -1,9 +1,25 @@
 """Event-driven backtest engine (spec §3.3).
 
-Per bar t: (1) fill signals queued from t-1 at open[t]; (2) check SL/TP on bar t's range
-(SL wins ties); (3) mark equity at close[t]; (4) queue signals whose signal_bar == t.
+Per bar t: (1) fill signals queued from t-1 at open[t]; (2) check SL/TP on bar t's range;
+(3) mark equity at close[t]; (4) queue signals whose signal_bar == t.
 Candles are BID. Buy fills/exits at ask = bid + spread; buy SL/TP trigger on bid.
 Sell fills/exits at bid; sell SL/TP trigger on ask.
+
+Exit precedence within a bar (I4): the OPEN is tested first, so a bar that gaps straight
+through TP books TP even when its range also reaches SL. Only when the open is between the
+two levels does the intrabar test run, and there SL wins the tie (the pessimistic
+assumption, since one bar's OHLC cannot say which level was touched first).
+
+Deliberate deviation (I5): TP exits are modelled as limit fills and take NO slippage, while
+SL exits (and entries) do. A real stop is a market order into a moving book; a real limit
+order fills at its price or not at all. Results are therefore very slightly optimistic on
+the TP side — a TP that would have been missed by a tick is booked as a win.
+
+Ruin floor (C2): when marked equity at a bar's close falls to `ruin_floor_pct` of the
+starting equity the account is treated as blown — open positions are closed at that close
+with `exit_reason="ruin"`, no further fills are accepted, and the equity curve stays flat.
+Without it the engine kept sizing off a negative balance (`lots_for_risk` returns min-lot)
+and reported drawdowns above 100%.
 """
 from __future__ import annotations
 
@@ -19,7 +35,8 @@ from ..signals import Direction, Signal
 
 TRADE_COLUMNS = ["entry_time", "exit_time", "direction", "variant", "tp_r", "entry_price", "exit_price",
                  "sl_price", "tp_price", "lots", "sl_dist", "risk_usd", "r_multiple", "pnl_usd",
-                 "commission", "exit_reason", "bars_held", "bars_in_wait", "anchor_time", "oversized"]
+                 "commission", "exit_reason", "bars_held", "bars_in_wait", "anchor_time", "oversized",
+                 "capped"]
 SKIPPED_COLUMNS = ["time", "signal_time", "direction", "variant", "reason"]
 _TIME_COLS = ("entry_time", "exit_time", "anchor_time", "time", "signal_time")
 
@@ -37,6 +54,7 @@ class Position:
     risk_usd: float
     commission: float
     oversized: bool
+    capped: bool
 
 
 @dataclass
@@ -48,6 +66,8 @@ class BacktestResult:
     variant: str
     concurrency: str
     initial_equity: float
+    ruined: bool = False
+    ruin_time: pd.Timestamp | None = None
 
 
 def _to_frame(rows: list[dict], columns: list[str]) -> pd.DataFrame:
@@ -59,7 +79,8 @@ def _to_frame(rows: list[dict], columns: list[str]) -> pd.DataFrame:
 
 
 def run_backtest(bars: Bars, signals: list[Signal], tp_r: float, spec: SymbolSpec, costs: CostParams,
-                 sizing: SizingParams, concurrency: str = "hedge") -> BacktestResult:
+                 sizing: SizingParams, concurrency: str = "hedge",
+                 ruin_floor_pct: float = 0.10) -> BacktestResult:
     if concurrency not in ("hedge", "single"):
         raise ValueError(f"concurrency must be 'hedge' or 'single', got {concurrency!r}")
     n = len(bars)
@@ -73,12 +94,15 @@ def run_backtest(bars: Bars, signals: list[Signal], tp_r: float, spec: SymbolSpe
         by_bar.setdefault(s.signal_bar, []).append(s)
 
     equity = float(sizing.initial_equity)
+    ruin_level = float(sizing.initial_equity) * float(ruin_floor_pct)
     eq_curve = np.empty(n, dtype=np.float64)
     positions: dict[Direction, Position] = {}
     pending: list[Signal] = []
     trades: list[dict] = []
     skipped: list[dict] = []
     variant_name = signals[0].variant if signals else ""
+    ruined = False
+    ruin_bar: int | None = None
 
     def close_position(pos: Position, bar: int, price: float, reason: str) -> None:
         nonlocal equity
@@ -94,6 +118,7 @@ def run_backtest(bars: Bars, signals: list[Signal], tp_r: float, spec: SymbolSpe
             "pnl_usd": net, "commission": pos.commission, "exit_reason": reason,
             "bars_held": bar - pos.entry_bar, "bars_in_wait": pos.signal.bars_in_wait,
             "anchor_time": tm[pos.signal.anchor_bar], "oversized": pos.oversized,
+            "capped": pos.capped,
         })
 
     def skip(s: Signal, bar: int, reason: str) -> None:
@@ -113,33 +138,42 @@ def run_backtest(bars: Bars, signals: list[Signal], tp_r: float, spec: SymbolSpe
                 skip(s, t, "rejected_invalid_sl")
                 continue
             sl_dist = abs(fill - s.sl_price)
-            lots, oversized = lots_for_risk(equity, sizing.risk_pct, sl_dist, spec)
+            lots, oversized, capped = lots_for_risk(equity, sizing.risk_pct, sl_dist, spec)
             commission = costs.commission_per_lot_rt * lots
             equity -= commission
             positions[s.direction] = Position(
                 direction=s.direction, signal=s, entry_bar=t, entry_price=float(fill), sl=s.sl_price,
                 tp=float(fill + d * tp_r * sl_dist), lots=lots, sl_dist=float(sl_dist),
                 risk_usd=float(sl_dist * lots * cs), commission=float(commission), oversized=oversized,
+                capped=capped,
             )
         pending = []
 
-        # 2. exits (SL before TP)
+        # 2. exits — open first (a gap past a level fills there), then intrabar with SL before TP
         for key in list(positions):
             pos = positions[key]
             if int(key) == 1:
                 bo, bh, bl = o[t], h[t], l[t]
-                if bl <= pos.sl:
-                    price, reason = min(bo, pos.sl) - slip, "SL"
+                if bo <= pos.sl:
+                    price, reason = bo - slip, "SL"
+                elif bo >= pos.tp:
+                    price, reason = bo, "TP"
+                elif bl <= pos.sl:
+                    price, reason = pos.sl - slip, "SL"
                 elif bh >= pos.tp:
-                    price, reason = max(bo, pos.tp), "TP"
+                    price, reason = pos.tp, "TP"
                 else:
                     continue
             else:
                 ao, ah, al = o[t] + spread, h[t] + spread, l[t] + spread
-                if ah >= pos.sl:
-                    price, reason = max(ao, pos.sl) + slip, "SL"
+                if ao >= pos.sl:
+                    price, reason = ao + slip, "SL"
+                elif ao <= pos.tp:
+                    price, reason = ao, "TP"
+                elif ah >= pos.sl:
+                    price, reason = pos.sl + slip, "SL"
                 elif al <= pos.tp:
-                    price, reason = min(ao, pos.tp), "TP"
+                    price, reason = pos.tp, "TP"
                 else:
                     continue
             close_position(pos, t, float(price), reason)
@@ -152,11 +186,21 @@ def run_backtest(bars: Bars, signals: list[Signal], tp_r: float, spec: SymbolSpe
             unreal += int(key) * (mark - pos.entry_price) * pos.lots * cs
         eq_curve[t] = equity + unreal
 
+        # 3b. ruin floor: close out at this close, then stop trading and flat-line the curve
+        if eq_curve[t] <= ruin_level:
+            for key, pos in list(positions.items()):
+                mark = c[t] if int(key) == 1 else c[t] + spread
+                close_position(pos, t, float(mark), "ruin")
+            positions.clear()
+            ruined, ruin_bar = True, t
+            eq_curve[t:] = equity
+            break
+
         # 4. queue this bar's signals for next open
         if t in by_bar:
             pending = list(by_bar[t])
 
-    if n > 0:
+    if n > 0 and not ruined:
         last = n - 1
         for key, pos in list(positions.items()):
             mark = c[last] if int(key) == 1 else c[last] + spread
@@ -167,4 +211,6 @@ def run_backtest(bars: Bars, signals: list[Signal], tp_r: float, spec: SymbolSpe
     equity_series = pd.Series(eq_curve, index=bars.datetimes(), name="equity")
     return BacktestResult(trades=_to_frame(trades, TRADE_COLUMNS), skipped=_to_frame(skipped, SKIPPED_COLUMNS),
                           equity=equity_series, tp_r=float(tp_r), variant=variant_name,
-                          concurrency=concurrency, initial_equity=float(sizing.initial_equity))
+                          concurrency=concurrency, initial_equity=float(sizing.initial_equity),
+                          ruined=ruined,
+                          ruin_time=None if ruin_bar is None else pd.Timestamp(tm[ruin_bar], unit="s", tz="UTC"))

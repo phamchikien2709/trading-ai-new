@@ -9,24 +9,29 @@ SPEC = SymbolSpec(name="T", point=0.01, digits=2, contract_size=1.0, min_lot=0.0
 
 
 def test_basic_floor_to_step():
-    lots, oversized = lots_for_risk(10_000, 1.0, 10.2, SPEC)   # 100 / 10.2 = 9.8039
-    assert lots == pytest.approx(9.80) and not oversized
+    lots, oversized, capped = lots_for_risk(10_000, 1.0, 10.2, SPEC)   # 100 / 10.2 = 9.8039
+    assert lots == pytest.approx(9.80) and not oversized and not capped
 
 
 def test_contract_size_scales():
     spec = SymbolSpec(name="X", point=0.01, digits=2, contract_size=100.0, min_lot=0.01, max_lot=100.0, lot_step=0.01)
-    lots, _ = lots_for_risk(10_000, 1.0, 5.0, spec)   # 100 / (5*100) = 0.2
+    lots, _, _ = lots_for_risk(10_000, 1.0, 5.0, spec)   # 100 / (5*100) = 0.2
     assert lots == pytest.approx(0.20)
 
 
 def test_min_lot_oversized_flag():
-    lots, oversized = lots_for_risk(100, 1.0, 500.0, SPEC)   # 1 / 500 = 0.002 -> below min
-    assert lots == 0.01 and oversized
+    lots, oversized, capped = lots_for_risk(100, 1.0, 500.0, SPEC)   # 1 / 500 = 0.002 -> below min
+    assert lots == 0.01 and oversized and not capped
 
 
-def test_max_lot_clamp():
-    lots, oversized = lots_for_risk(10_000_000, 1.0, 1.0, SPEC)   # 100000 lots -> clamp
-    assert lots == 200.0 and not oversized
+def test_max_lot_clamp_sets_capped_flag():
+    lots, oversized, capped = lots_for_risk(10_000_000, 1.0, 1.0, SPEC)   # 100000 lots -> clamp
+    assert lots == 200.0 and not oversized and capped
+
+
+def test_exactly_max_lot_is_not_capped():
+    lots, oversized, capped = lots_for_risk(20_000, 1.0, 1.0, SPEC)   # 200 lots exactly
+    assert lots == 200.0 and not oversized and not capped
 
 
 def test_invalid_sl_dist_raises():
@@ -61,6 +66,7 @@ def test_floor_epsilon_does_not_lose_a_step():
     assert math.floor(raw / SPEC.lot_step + 1e-9) == 980, "Epsilon should lift 979.9999... to 980"
 
     # Now verify the function handles it correctly by returning 9.80 lots.
-    lots, oversized = lots_for_risk(equity, risk_pct, sl_dist, SPEC)
+    lots, oversized, capped = lots_for_risk(equity, risk_pct, sl_dist, SPEC)
     assert lots == pytest.approx(9.80), f"Expected 9.80, got {lots}"
     assert not oversized, f"Expected not oversized, got {oversized}"
+    assert not capped
