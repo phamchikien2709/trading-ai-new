@@ -22,6 +22,10 @@
 //        1 cross = max 1 trade. Another RSI14 cross up 75 while ARMED/TRACKING resets the setup.
 //  SELL: mirror (RSI14 crosses DOWN 25, first HIGH segment after the flag, SL above swing high).
 //
+//  Defaults = configuration selected by the Python grid optimisation on XAUUSDc M5 (2017-2026, risk 1%):
+//    RSI fast 5, RSI14 80/20, RSI2 levels 90/10, ATR x1.5, TP 8R, H1 RSI14 trend filter ON.
+//    See results/rsi2_swing/20260908_180148 and README. Previous defaults: RSI2, 75/25, ATR x1, TP 2R, 5%, filter off.
+//
 //  Known divergences vs a hedging MT5 backtest (by design):
 //   1. Pine has no spread model. `slippage` (~spread/2 in ticks) approximates it.
 //      XAUUSD mintick 0.01, spread ~0.26 -> 13 ticks. Edit the constant for your broker.
@@ -37,8 +41,8 @@ strategy("RSI2 Swing Pullback", shorttitle="RSI2-SWING", overlay=true,
 
 // ---------------------------------------------------------------- inputs ----
 grpEntry = "Entry / Risk"
-tpR        = input.float(2.0, "Take profit (R)", minval=0.1, step=0.5, group=grpEntry)
-riskPct    = input.float(5.0, "Risk % of equity per trade", minval=0.01, step=0.25, group=grpEntry)
+tpR        = input.float(8.0, "Take profit (R)", minval=0.1, step=0.5, group=grpEntry)
+riskPct    = input.float(1.0, "Risk % of equity per trade", minval=0.01, step=0.25, group=grpEntry)
 enableBuy  = input.bool(true, "Enable BUY", group=grpEntry)
 enableSell = input.bool(true, "Enable SELL", group=grpEntry)
 blockOpp   = input.bool(true, "Block opposite signal while in trade", group=grpEntry,
@@ -47,20 +51,20 @@ maxWait    = input.int(0, "Max bars from flag to entry (0 = never expires)", min
 
 grpTrig = "Trigger RSI (slow)"
 rsiSlowLen = input.int(14, "RSI length", minval=2, group=grpTrig)
-sHi        = input.float(75, "Overbought -> arm BUY", group=grpTrig)
-sLo        = input.float(25, "Oversold -> arm SELL", group=grpTrig)
-useHtf     = input.bool(false, "H1 RSI14 trend filter", group=grpTrig,
+sHi        = input.float(80, "Overbought -> arm BUY", group=grpTrig)
+sLo        = input.float(20, "Oversold -> arm SELL", group=grpTrig)
+useHtf     = input.bool(true, "H1 RSI14 trend filter", group=grpTrig,
      tooltip="Take BUY only while the last COMPLETED higher-timeframe RSI is above 50, SELL only below. A blocked trigger still consumes the flag.")
 htfTf      = input.timeframe("60", "Trend timeframe", group=grpTrig)
 
 grpStruct = "Structure RSI (fast)"
-rsiFastLen = input.int(2, "RSI length", minval=1, group=grpStruct)
+rsiFastLen = input.int(5, "RSI length", minval=1, group=grpStruct)
 fHi        = input.float(90, "Cross up -> HIGH segment starts / LOW segment ends", group=grpStruct)
 fLo        = input.float(10, "Cross down -> LOW segment starts / HIGH segment ends", group=grpStruct)
 
 grpSL = "Stop loss"
 atrLen  = input.int(14, "ATR length", minval=1, group=grpSL)
-atrMult = input.float(1.0, "ATR multiplier below/above swing", minval=0, step=0.25, group=grpSL)
+atrMult = input.float(1.5, "ATR multiplier below/above swing", minval=0, step=0.25, group=grpSL)
 minSlTicks = input.int(0, "Min SL distance (ticks, 0 = off)", minval=0, group=grpSL,
      tooltip="Skip the trade when the stop sits closer than this to the entry. The RSI2 structure can put it inside the spread, where a nominal 5% risk is a coin flip on the next tick.")
 
