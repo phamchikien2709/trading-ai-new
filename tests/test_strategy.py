@@ -96,6 +96,24 @@ def test_variant_c_pivot_break_and_no_pivot(mk_bars):
     assert run_direction(Direction.BUY, bars, mk_ind(bars, rsi2), P, Variant.C) == []
 
 
+def test_sell_mirror_variant_a(mk_closes):
+    bars = mk_closes([100, 99, 101, 102, 101, 100])
+    rsi =        [30, 20, 45, 50, 42, 38]   # cross down@1, wait@2 (rsi>40), bear FVG@4
+    ind = mk_ind(bars, rsi, fvg_bear=(4,))
+    sigs = run_direction(Direction.SELL, bars, ind, P, Variant.A)
+    assert len(sigs) == 1
+    s = sigs[0]
+    assert s.direction == Direction.SELL and s.variant == Variant.A
+    assert s.signal_bar == 4 and s.anchor_bar == 1 and s.bars_in_wait == 2
+    # fvg_zone for bear FVG at t=4: (bars.high[4], bars.low[2])
+    assert s.fvg_zone == (bars.high[4], bars.low[2])
+    # sl_price for SELL: max(high[anchor:signal_bar+1]) + atr
+    assert s.sl_price == pytest.approx(bars.high[1:5].max() + 1.0)
+    # Bear FVG on the WAIT-entry bar itself should NOT trigger
+    ind2 = mk_ind(bars, rsi, fvg_bear=(2,))
+    assert run_direction(Direction.SELL, bars, ind2, P, Variant.A) == []
+
+
 def test_sell_mirror_variant_b(mk_closes):
     bars = mk_closes([100, 99, 101, 102, 101, 100])
     rsi =        [30, 20, 45, 50, 42, 38]   # cross down@1, wait@2 (rsi>40), reclaim down @5
@@ -104,6 +122,21 @@ def test_sell_mirror_variant_b(mk_closes):
     s = sigs[0]
     assert s.direction == Direction.SELL and s.anchor_bar == 1 and s.signal_bar == 5
     assert s.sl_price == pytest.approx(bars.high[1:6].max() + 1.0)
+
+
+def test_sell_mirror_variant_c(mk_bars):
+    o = [100, 99, 97, 96, 97, 98, 99, 98, 95]
+    h = [101, 99, 97, 96.5, 97.5, 98.5, 99.5, 98.5, 95.5]
+    l = [99, 97, 93, 94, 96, 97, 98, 99, 100]   # pivot low at t=2 (93), confirmed t=4
+    c = [99, 97, 93, 94, 96, 97, 98, 97, 91]
+    bars = mk_bars(o, h, l, c)
+    rsi = [30, 20, 45, 50, 42, 50, 48, 46, 40]   # cross@1 (anchor 1), wait@2
+    sigs = run_direction(Direction.SELL, bars, mk_ind(bars, rsi), P, Variant.C)
+    assert [s.signal_bar for s in sigs] == [8]      # close 91 < pivot 93
+    assert sigs[0].pivot_price == 93.0
+    # same bars but pivot formed BEFORE new anchor -> ignored
+    rsi2 = [30, 74, 74, 74, 20, 50, 48, 46, 40]    # cross@1, re-cross@4 -> pivot at t=2 < new anchor
+    assert run_direction(Direction.SELL, bars, mk_ind(bars, rsi2), P, Variant.C) == []
 
 
 def test_nan_rsi_prefix_is_skipped(mk_closes):

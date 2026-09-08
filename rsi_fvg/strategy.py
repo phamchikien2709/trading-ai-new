@@ -94,6 +94,8 @@ def run_direction(direction: Direction, bars: Bars, ind: Indicators,
             continue
         cross = (r1 <= ext < r0) if buy else (r1 >= ext > r0)
 
+        # Pivot bookkeeping: record new pivot formed at/after anchor. Safe to use possibly-stale
+        # anchor here because reset_to() is called immediately after if cross=True, clearing last_pivot.
         # pivot confirmed at t has index t-L; only pivots formed at/after anchor count
         p = t - L
         if p >= 0 and anchor >= 0 and p >= anchor and piv[p]:
