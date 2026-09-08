@@ -42,8 +42,8 @@ blockOpp   = input.bool(true, "Block opposite signal while in trade", group=grpE
 
 grpTrig = "Trend filter"
 rsiSlowLen = input.int(14, "RSI length", minval=2, group=grpTrig)
-useHtf     = input.bool(true, "H1 RSI14 trend filter", group=grpTrig,
-     tooltip="Take BUY only while the last COMPLETED higher-timeframe RSI is above 50, SELL only below. A blocked trigger still consumes the flag.")
+useHtf     = input.bool(false, "H1 RSI14 trend filter", group=grpTrig,
+     tooltip="Off by default, matching spec 2.3 (htf_seconds = 0) and the default Python run. Take BUY only while the last COMPLETED higher-timeframe RSI is above 50, SELL only below. A blocked trigger still consumes the flag.")
 htfTf      = input.timeframe("60", "Trend timeframe", group=grpTrig)
 
 grpStruct = "Structure RSI (fast)"

@@ -18,9 +18,9 @@
 
 ### 2.1 Indicator
 - `rsi_fast = RSI(rsi_fast)` Wilder, mặc định 2; mốc `fast_hi/fast_lo` = 90/10. Cross và cấu trúc swing **dùng lại** `cross_up/cross_down/swing_structure` của `rsi2_swing.py` (spec RSI2 §2.2: đoạn HIGH/LOW xen kẽ, bar biên thuộc cả hai đoạn, swing xác nhận khi đoạn kết thúc).
-- `ema_fast = EMA(ema_fast)`, `ema_slow = EMA(ema_slow)` trên close, mặc định 20/100. EMA seed = giá close đầu tiên, `α = 2/(n+1)` (khớp `ta.ema` Pine và `iMA` MODE_EMA MT5 sau warm-up; parity so sánh từ bar `5×ema_slow` trở đi).
+- `ema_fast = EMA(ema_fast)`, `ema_slow = EMA(ema_slow)` trên close, mặc định 20/100. `α = 2/(n+1)`; Python seed = close đầu tiên.
 - `ATR(14)` Wilder.
-- Python để NaN cho `ema_slow-1` bar đầu (không có tín hiệu trong warm-up); Pine's `ta.ema` có giá trị từ bar 0 — đây là sai lệch duy nhất có chủ ý.
+- **Warm-up và parity với Pine/MT5.** Python để NaN cho `n-1` bar đầu của mỗi EMA (không có tín hiệu trong warm-up). `ta.ema` của Pine cũng **không xác định** trên đúng đoạn đó, vì nó được seed bằng `ta.sma(src, length)` — mà `ta.sma` là `na` trước bar `length-1`. Nên **cả hai phía đều không sinh tín hiệu trong warm-up**. Sai lệch có chủ ý duy nhất là **seed**: Python bắt đầu đệ quy từ `close[0]`, còn `ta.ema` (Pine) và `iMA` MODE_EMA (MT5) bắt đầu từ SMA của `period` close đầu tiên. Sau đó cùng một `α`, nên khoảng lệch tắt dần theo hàm hình học (đo trên random walk với `period=100`: ~0,7 đơn vị giá ở bar 99, ~0,01 ở bar 300, dưới 1e-6 từ bar 800). Vì vậy so parity từ bar `5×ema_slow` trở đi là hợp lệ.
 
 ### 2.2 Tín hiệu (không có state machine chờ)
 Tại bar `t`:

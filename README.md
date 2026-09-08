@@ -49,7 +49,13 @@ MT5 integration tests skip automatically when the terminal is not running.
 - No session filter, trailing stop or partial TP (by design, see specs).
 - Live bot, MQL5 EA and cross-platform parity checks are a later phase.
 - Pine ↔ Python parity is a manual spot-check (TradingView uses a different feed than Exness).
-- `ema()` leaves the first `period-1` bars NaN (no signals in the EMA warm-up); Pine's `ta.ema` emits values there.
+- `ema()` leaves the first `period-1` bars NaN (no signals in the EMA warm-up). Pine's `ta.ema` is undefined
+  over the same prefix — it is seeded with `ta.sma(src, length)`, which is itself `na` before bar `length-1` —
+  so neither side trades the warm-up. The real divergence is the **seed**: Python starts the recursion from
+  `close[0]`, while Pine's `ta.ema` and MT5's `iMA` MODE_EMA start from the SMA of the first `period` closes.
+  Same alpha afterwards, so the gap decays geometrically (measured on a random walk at `period=100`: ~0.7 price
+  units at bar 99, ~0.01 at bar 300, below 1e-6 by bar 800), which is why parity is checked from bar
+  `5 x ema_slow` onwards.
 
 ## RSI2 Swing Pullback — optimisation & report
 

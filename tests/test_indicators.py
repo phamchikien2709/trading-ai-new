@@ -90,6 +90,37 @@ def test_ema_hand_computed_with_nan_warmup():
     assert got[3] == pytest.approx(31.25)
 
 
+def test_ema_pine_divergence_is_the_seed_only_and_decays():
+    """Pins the real Python<->Pine EMA relationship (docstring / README / spec §2.1).
+
+    Pine's `ta.ema` is seeded with `ta.sma(src, length)`, which is itself `na` before bar
+    `length-1`, so BOTH sides are undefined for the first `period-1` bars — the divergence is
+    the seed (Python starts from close[0]) and it decays away. That is why the documented
+    parity window starts at bar 5*ema_slow.
+    """
+    from rsi_fvg.indicators import ema
+    rng = np.random.default_rng(3)
+    n, period = 1200, 100
+    close = 2000 + np.cumsum(rng.normal(0, 2.0, n))
+
+    def pine_ema(src, length):
+        out = np.full(len(src), np.nan)
+        alpha = 2.0 / (length + 1.0)
+        out[length - 1] = src[:length].mean()          # ta.sma seed; na before this bar
+        for i in range(length, len(src)):
+            out[i] = out[i - 1] + alpha * (src[i] - out[i - 1])
+        return out
+
+    py, pine = ema(close, period), pine_ema(close, period)
+    assert np.all(np.isnan(py[:period - 1])) and np.all(np.isnan(pine[:period - 1]))
+    assert not np.isnan(py[period - 1]) and not np.isnan(pine[period - 1])   # same first live bar
+    gap = np.abs(py - pine)
+    assert gap[period - 1] > 0.1                    # the seed difference is real at the warm-up edge
+    assert gap[300] < gap[period - 1]               # and monotonically decaying
+    assert gap[5 * period] < 1e-3                   # sub-tick by the documented parity window
+    assert gap[800] < 1e-6                          # gone entirely a few hundred bars later
+
+
 def test_ema_period_one_is_the_close_and_short_input_is_safe():
     from rsi_fvg.indicators import ema
     close = np.array([5.0, 7.0, 9.0])
