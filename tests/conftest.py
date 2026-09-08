@@ -11,14 +11,8 @@ if str(ROOT) not in sys.path:
 from rsi_fvg.bars import Bars  # noqa: E402
 
 
-def make_bars(o=None, h=None, l=None, c=None, open_=None, high=None, low=None, close=None, start=1_700_000_000, step=300, spread=None):
-    """Build Bars from python lists. step = seconds per bar (300 = M5).
-    Accepts either (o, h, l, c) or (open_, high, low, close) keyword arguments."""
-    # Support both naming conventions
-    o = o or open_
-    h = h or high
-    l = l or low
-    c = c or close
+def make_bars(o, h, l, c, start=1_700_000_000, step=300, spread=None):
+    """Build Bars from python lists. step = seconds per bar (300 = M5)."""
 
     n = len(c)
     assert len(o) == len(h) == len(l) == n
