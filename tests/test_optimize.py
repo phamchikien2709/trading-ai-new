@@ -95,6 +95,14 @@ def test_min_sl_filter_is_recorded_and_counted():
     assert ((gap >= 0) & (gap <= 1)).all() and (on["n_rejected_min_sl"] > 0).all()
 
 
+def test_htf_gate_is_a_run_level_switch_recorded_on_every_row():
+    b = _bars()
+    off = run_optimization({"M5": b}, {"M5": SPEC}, Rsi2SwingParams(), SMALL, COSTS, SIZING)
+    on = run_optimization({"M5": b}, {"M5": SPEC}, Rsi2SwingParams(htf_seconds=3600), SMALL, COSTS, SIZING)
+    assert (off["htf_seconds"] == 0).all() and (on["htf_seconds"] == 3600).all()
+    assert (on["n_signals"].to_numpy() < off["n_signals"].to_numpy()).all()
+
+
 def test_run_single_honours_the_min_sl_filter():
     b = _bars()
     params = Rsi2SwingParams()

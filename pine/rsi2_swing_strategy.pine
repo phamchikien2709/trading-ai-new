@@ -10,6 +10,11 @@
 //                  -> swing low  = lowest(low) over the segment
 //    A swing is only KNOWN when its segment ends -> that bar is the signal bar.
 //
+//  Optional filters (both off by default):
+//    "Min SL distance (ticks)"  — skip the trade when the stop sits closer than N ticks.
+//    "H1 RSI14 trend filter"    — BUY only while the last COMPLETED HTF RSI is > 50, SELL < 50.
+//    A trigger blocked by either one still consumes the flag: one RSI14 cross = at most one trade.
+//
 //  BUY : RSI(14) crosses UP 75 -> ARMED (flag on).
 //        First LOW segment that STARTS after the flag -> TRACKING.
 //        LOW segment ends (RSI2 crosses up 90) -> swing low confirmed -> BUY at next open.
@@ -44,6 +49,9 @@ grpTrig = "Trigger RSI (slow)"
 rsiSlowLen = input.int(14, "RSI length", minval=2, group=grpTrig)
 sHi        = input.float(75, "Overbought -> arm BUY", group=grpTrig)
 sLo        = input.float(25, "Oversold -> arm SELL", group=grpTrig)
+useHtf     = input.bool(false, "H1 RSI14 trend filter", group=grpTrig,
+     tooltip="Take BUY only while the last COMPLETED higher-timeframe RSI is above 50, SELL only below. A blocked trigger still consumes the flag.")
+htfTf      = input.timeframe("60", "Trend timeframe", group=grpTrig)
 
 grpStruct = "Structure RSI (fast)"
 rsiFastLen = input.int(2, "RSI length", minval=1, group=grpStruct)
@@ -65,6 +73,10 @@ showLines  = input.bool(true, "Plot SL / TP of open trade", group=grpViz)
 rsiS = ta.rsi(close, rsiSlowLen)
 rsiF = ta.rsi(close, rsiFastLen)
 atr  = ta.atr(atrLen)
+// Trend RSI of the last COMPLETED higher-timeframe bar. The `[1]` + `lookahead_on` pair is the
+// non-repainting idiom: lookahead fetches the HTF bar's slot as soon as it opens, and the [1]
+// shift makes that the previous, already-closed bar. Python side: htf_rsi() + htf_level (50).
+float htfRsi = request.security(syminfo.tickerid, htfTf, ta.rsi(close, rsiSlowLen)[1], barmerge.gaps_off, barmerge.lookahead_on)
 bool ok = not na(rsiS) and not na(rsiS[1]) and not na(rsiF) and not na(rsiF[1]) and not na(atr)
 
 bool sUp = ok and rsiS[1] <= sHi and rsiS > sHi      // RSI14 cross up 75
@@ -156,10 +168,12 @@ if ok
     else                                                // TRACKING
         bRunLow := math.min(bRunLow, low)
         if fUp                                          // LOW segment ends -> swing low confirmed
-            buyTrig := true
-            buySL   := bRunLow - atrMult * atr
-            buyWait := bar_index - bAnchor
-            bState := 0
+            bool bHtfOk = not useHtf or (not na(htfRsi) and htfRsi > 50)
+            if bHtfOk                                   // HTF trend must agree; unknown = no
+                buyTrig := true
+                buySL   := bRunLow - atrMult * atr
+                buyWait := bar_index - bAnchor
+            bState := 0                                 // flag consumed either way
             bAnchor := na
             bRunLow := na
 
@@ -193,10 +207,12 @@ if ok
     else
         sRunHigh := math.max(sRunHigh, high)
         if fDn                                          // HIGH segment ends -> swing high confirmed
-            sellTrig := true
-            sellSL   := sRunHigh + atrMult * atr
-            sellWait := bar_index - sAnchor
-            sState := 0
+            bool sHtfOk = not useHtf or (not na(htfRsi) and htfRsi < 50)
+            if sHtfOk
+                sellTrig := true
+                sellSL   := sRunHigh + atrMult * atr
+                sellWait := bar_index - sAnchor
+            sState := 0                                 // flag consumed either way
             sAnchor := na
             sRunHigh := na
 

@@ -70,6 +70,9 @@ def main() -> int:
     ap.add_argument("--max-wait", type=int, default=0)
     ap.add_argument("--min-sl-mult", type=float, default=0.0,
                     help="reject a fill whose SL sits closer than this many spreads to the entry (0 = off)")
+    ap.add_argument("--htf", type=int, default=0,
+                    help="higher-timeframe RSI trend gate, in seconds (0 = off, 3600 = H1): BUY only "
+                         "above the level, SELL only below, read off the last completed HTF bar")
     ap.add_argument("--is-frac", type=float, default=0.7)
     ap.add_argument("--data-dir", default=str(ROOT / "data"),
                     help="cache dir; a missing cache triggers a live MT5 fetch of full history")
@@ -84,7 +87,7 @@ def main() -> int:
     grid = GridSpec(tp_r=tuple(float(x) for x in a.tp), atr_mult=tuple(float(x) for x in a.atr_mult),
                     rsi_slow_levels=_pairs(a.rsi14), rsi_fast_levels=_pairs(a.rsi2),
                     rsi_fast=tuple(int(x) for x in a.rsi_fast))
-    base = Rsi2SwingParams(max_wait=a.max_wait)
+    base = Rsi2SwingParams(max_wait=a.max_wait, htf_seconds=a.htf)
 
     bars_by_tf, spec_by_tf, ranges = {}, {}, {}
     for tf in tfs:
@@ -125,6 +128,7 @@ def main() -> int:
                 "risk_pct": sizing.risk_pct, "concurrency": a.concurrency, "spread_points": cfg.costs.spread_points,
                 "commission_per_lot_rt": cfg.costs.commission_per_lot_rt, "slippage_points": cfg.costs.slippage_points,
                 "is_frac": a.is_frac, "max_wait": a.max_wait, "min_sl_mult": a.min_sl_mult,
+                "htf_seconds": a.htf,
                 "grid": {"tp_r": list(grid.tp_r), "atr_mult": list(grid.atr_mult), "rsi14": a.rsi14, "rsi2": a.rsi2,
                          "rsi_fast": list(grid.rsi_fast)},
                 "git_hash": _git_hash(), "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M")}

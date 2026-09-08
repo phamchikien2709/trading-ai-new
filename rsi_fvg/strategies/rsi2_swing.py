@@ -28,6 +28,11 @@ class Rsi2SwingParams:
     atr_len: int = 14
     atr_mult: float = 1.0
     max_wait: int = 0  # bars from flag to entry; 0 = never expires
+    # V3 higher-timeframe trend gate: 0 = off, 3600 = H1. A trigger only becomes a Signal when
+    # the last COMPLETED HTF bar's RSI is on the trade's side of `htf_level`.
+    htf_seconds: int = 0
+    htf_rsi_len: int = 14
+    htf_level: float = 50.0
 
 
 class State(IntEnum):
@@ -96,14 +101,43 @@ def swing_structure(high: np.ndarray, low: np.ndarray, f_up: np.ndarray, f_dn: n
     return SwingEvents(seg, low_conf, low_price, high_conf, high_price)
 
 
-def compute_inputs(bars: Bars, params: Rsi2SwingParams) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def htf_rsi(bars: Bars, htf_seconds: int, period: int) -> np.ndarray:
+    """RSI of the higher timeframe, shifted one HTF bar and forward-filled onto the base bars.
+
+    Bars are bucketed by `time // htf_seconds`; the HTF close series is the last close of each
+    bucket. A base bar inside bucket b reads the RSI of bucket b-1 — the last bar that had
+    already CLOSED while bar b was forming — so the series carries no look-ahead: the value on
+    a bar never changes when later bars arrive (see the prefix-invariance test). NaN until the
+    first bucket whose RSI is defined has completed. All NaN when `htf_seconds <= 0` (off).
+    """
+    n = len(bars)
+    out = np.full(n, np.nan)
+    if n == 0 or htf_seconds <= 0:
+        return out
+    bucket = np.asarray(bars.time, dtype=np.int64) // int(htf_seconds)
+    starts = np.r_[True, bucket[1:] != bucket[:-1]]      # first bar of each bucket
+    idx = np.cumsum(starts) - 1                          # bucket ordinal per base bar
+    last = np.flatnonzero(np.r_[starts[1:], True])       # last bar of each bucket
+    rsi = rsi_wilder(np.asarray(bars.close, float)[last], period)
+    out[:] = np.r_[np.nan, rsi[:-1]][idx]                # bucket b <- RSI of bucket b-1
+    return out
+
+
+def compute_inputs(bars: Bars, params: Rsi2SwingParams
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+    htf = htf_rsi(bars, params.htf_seconds, params.htf_rsi_len) if params.htf_seconds > 0 else None
     return (rsi_wilder(bars.close, params.rsi_slow),
             rsi_wilder(bars.close, params.rsi_fast),
-            atr_wilder(bars.high, bars.low, bars.close, params.atr_len))
+            atr_wilder(bars.high, bars.low, bars.close, params.atr_len),
+            htf)
 
 
 def run_direction(direction: Direction, bars: Bars, rsi_slow: np.ndarray, rsi_fast: np.ndarray,
-                  atr: np.ndarray, params: Rsi2SwingParams) -> list[Signal]:
+                  atr: np.ndarray, params: Rsi2SwingParams,
+                  htf: np.ndarray | None = None) -> list[Signal]:
+    use_htf = params.htf_seconds > 0
+    if use_htf and htf is None:
+        raise ValueError("htf_seconds > 0 needs the htf array (compute_inputs builds it)")
     buy = direction == Direction.BUY
     n = len(bars)
     close, high, low = bars.close, bars.high, bars.low
@@ -139,6 +173,11 @@ def run_direction(direction: Direction, bars: Bars, rsi_slow: np.ndarray, rsi_fa
         # TRACKING
         run_ext = min(run_ext, low[t]) if buy else max(run_ext, high[t])
         if seg_end[t]:
+            if use_htf and not (htf[t] > params.htf_level if buy else htf[t] < params.htf_level):
+                # The HTF trend is against the trade (or unknown — NaN fails both tests). The
+                # trigger still consumes the flag, exactly as a blocked entry does downstream.
+                state, anchor, run_ext = State.IDLE, -1, math.nan
+                continue
             sl = run_ext - params.atr_mult * atr[t] if buy else run_ext + params.atr_mult * atr[t]
             out.append(Signal(direction=direction, variant=VARIANT, signal_bar=t, anchor_bar=anchor,
                               ref_price=float(close[t]), sl_price=float(sl), bars_in_wait=t - anchor,
@@ -149,9 +188,9 @@ def run_direction(direction: Direction, bars: Bars, rsi_slow: np.ndarray, rsi_fa
 
 def run_strategy(bars: Bars, params: Rsi2SwingParams,
                  directions: tuple[Direction, ...] = (Direction.BUY, Direction.SELL)) -> list[Signal]:
-    rs, rf, atr = compute_inputs(bars, params)
+    rs, rf, atr, htf = compute_inputs(bars, params)
     out: list[Signal] = []
     for d in directions:
-        out.extend(run_direction(d, bars, rs, rf, atr, params))
+        out.extend(run_direction(d, bars, rs, rf, atr, params, htf=htf))
     out.sort(key=lambda s: (s.signal_bar, int(s.direction)))
     return out

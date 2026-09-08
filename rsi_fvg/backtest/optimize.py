@@ -1,4 +1,10 @@
-"""Grid optimisation with IS/OOS split, neighbourhood robustness and auto-recommendation (spec §4)."""
+"""Grid optimisation with IS/OOS split, neighbourhood robustness and auto-recommendation (spec §4).
+
+Two of the three variants are run-level switches rather than grid axes: `min_sl_spread_mult`
+(V2) is an argument here, and the HTF trend gate (V3) travels on `base.htf_seconds`. Both are
+recorded on every row (`min_sl_mult`, `n_rejected_min_sl`, `htf_seconds`) so a saved grid says
+which filters produced it. The fast-RSI length (V1) *is* an axis: see `GridSpec.rsi_fast`.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -123,6 +129,7 @@ def run_optimization(bars_by_tf: dict[str, Bars], spec_by_tf: dict[str, SymbolSp
                                    "f_hi": float(f_hi), "f_lo": float(f_lo),
                                    "atr_mult": float(am), "tp_r": float(tp), "n_signals": len(signals),
                                    "min_sl_mult": float(min_sl_spread_mult), "n_rejected_min_sl": n_min_sl,
+                                   "htf_seconds": int(base.htf_seconds),
                                    "split_time": split, "ruined": bool(res.ruined), "ruin_time": res.ruin_time,
                                    "oversized_share": float(tr["oversized"].astype(bool).mean()) if len(tr) else 0.0,
                                    "capped_share": float(tr["capped"].astype(bool).mean()) if len(tr) else 0.0}

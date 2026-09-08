@@ -3,15 +3,17 @@ import pytest
 
 from rsi_fvg.bars import Bars
 from rsi_fvg.signals import Direction
-from rsi_fvg.strategies.rsi2_swing import (Rsi2SwingParams, cross_down, cross_up, run_direction,
-                                           run_strategy, swing_structure)
+from rsi_fvg.strategies.rsi2_swing import (Rsi2SwingParams, compute_inputs, cross_down, cross_up, htf_rsi,
+                                           run_direction, run_strategy, swing_structure)
 
 P = Rsi2SwingParams()  # 75/25, 90/10, atr_mult 1
+H1 = 3600
 
 
-def _run(direction, bars, rs, rf, params=P, atr=1.0):
+def _run(direction, bars, rs, rf, params=P, atr=1.0, htf=None):
     n = len(bars)
-    return run_direction(direction, bars, np.asarray(rs, float), np.asarray(rf, float), np.full(n, atr), params)
+    return run_direction(direction, bars, np.asarray(rs, float), np.asarray(rf, float), np.full(n, atr), params,
+                         htf=htf)
 
 
 def test_cross_helpers_nan_safe():
@@ -99,6 +101,101 @@ def test_sell_mirror(mk_bars):
     s = sigs[0]
     assert s.direction == Direction.SELL and s.signal_bar == 6 and s.anchor_bar == 1
     assert s.swing_price == 103.5 and s.sl_price == pytest.approx(104.5)
+
+
+# ------------------------------------------------- V3: HTF RSI trend filter ----
+_H1_CLOSES = [100.0, 110.0, 90.0, 100.0, 95.0]      # one value per H1 bucket, 12 M5 bars each
+
+
+def _h1_bars(mk_bars, closes=_H1_CLOSES, per_bucket=12):
+    start = 1_700_000_000 - 1_700_000_000 % H1       # align bar 0 with a bucket boundary
+    c = [v for v in closes for _ in range(per_bucket)]
+    return mk_bars(o=c, h=c, l=c, c=c, start=start, step=300)
+
+
+def test_htf_rsi_uses_the_last_completed_bucket(mk_bars):
+    # RSI(2) over the bucket closes [100,110,90,100,95] -> [nan, nan, 33.33, 60, 42.86].
+    # Shifted one bucket, so bucket 3 sees 33.33 and bucket 4 sees 60; the rest is NaN.
+    bars = _h1_bars(mk_bars)
+    out = htf_rsi(bars, H1, 2)
+    assert out.shape == (60,)
+    assert np.isnan(out[:36]).all()                  # buckets 0-2: no completed RSI yet
+    assert out[36:48] == pytest.approx(100 / 3)      # bucket 3 <- RSI of bucket 2
+    assert out[48:60] == pytest.approx(60.0)         # bucket 4 <- RSI of bucket 3
+    assert np.isnan(htf_rsi(bars, 0, 2)).all()       # 0 = off
+
+
+def test_htf_rsi_is_prefix_invariant(mk_bars):
+    # Look-ahead check: a bar's value must never change when later bars arrive. A partial
+    # bucket may not leak its running close into the bars that live inside it.
+    bars = _h1_bars(mk_bars)
+    full = htf_rsi(bars, H1, 2)
+    for k in (1, 11, 12, 13, 36, 37, 47, 48, 59, 60):
+        np.testing.assert_allclose(htf_rsi(bars.slice(0, k), H1, 2), full[:k], equal_nan=True)
+
+
+def test_htf_gate_blocks_the_trigger_but_still_consumes_the_flag(mk_bars):
+    l = [99, 100, 101, 98, 97, 96.5, 99]
+    h = [101, 102, 103, 100, 99, 98, 102]
+    bars = mk_bars(o=l, h=h, l=l, c=h)
+    rs = [70, 80, 80, 80, 80, 80, 80]
+    rf = [50, 95, 95, 5, 5, 5, 95]                   # BUY trigger at t=6
+    n = len(bars)
+    assert len(_run(Direction.BUY, bars, rs, rf)) == 1                       # gate off
+    on = Rsi2SwingParams(htf_seconds=H1)
+    assert _run(Direction.BUY, bars, rs, rf, on, htf=np.full(n, 40.0)) == []  # H1 RSI below 50
+    assert _run(Direction.BUY, bars, rs, rf, on, htf=np.full(n, np.nan)) == []   # unknown = blocked
+    assert _run(Direction.BUY, bars, rs, rf, on, htf=np.full(n, 50.0)) == []     # 50 is not > 50
+    assert len(_run(Direction.BUY, bars, rs, rf, on, htf=np.full(n, 60.0))) == 1
+
+
+def test_htf_gate_consumes_the_flag_like_a_trigger(mk_bars):
+    n = 9
+    bars = mk_bars(o=[100] * n, h=[101] * n, l=[99] * n, c=[100] * n)
+    rs = [70, 80, 80, 80, 80, 80, 80, 80, 80]        # one s_up at t=1, never re-armed
+    rf = [95, 95, 5, 95, 5, 95, 5, 95, 5]            # LOW segments end at t=3, t=5, t=7
+    on = Rsi2SwingParams(htf_seconds=H1)
+    assert [s.signal_bar for s in _run(Direction.BUY, bars, rs, rf, on, htf=np.full(n, 60.0))] == [3]
+    assert _run(Direction.BUY, bars, rs, rf, on, htf=np.full(n, 40.0)) == []    # not retried at t=5/t=7
+
+
+def test_htf_gate_mirrors_for_sell(mk_bars):
+    h = [101, 100, 99, 102, 103, 103.5, 100]
+    l = [99, 98, 97, 100, 101, 101.5, 98]
+    bars = mk_bars(o=l, h=h, l=l, c=l)
+    rs = [30, 20, 20, 20, 20, 20, 20]
+    rf = [50, 5, 5, 95, 95, 95, 5]                   # SELL trigger at t=6
+    n = len(bars)
+    on = Rsi2SwingParams(htf_seconds=H1)
+    assert len(_run(Direction.SELL, bars, rs, rf, on, htf=np.full(n, 40.0))) == 1
+    assert _run(Direction.SELL, bars, rs, rf, on, htf=np.full(n, 60.0)) == []
+
+
+def test_run_direction_demands_the_htf_array_when_the_gate_is_on(mk_bars):
+    bars = _h1_bars(mk_bars)
+    with pytest.raises(ValueError, match="htf_seconds"):
+        _run(Direction.BUY, bars, np.full(60, 50.0), np.full(60, 50.0), Rsi2SwingParams(htf_seconds=H1))
+
+
+def test_compute_inputs_supplies_htf_only_when_enabled(mk_bars):
+    bars = _h1_bars(mk_bars)
+    assert compute_inputs(bars, P)[3] is None
+    htf = compute_inputs(bars, Rsi2SwingParams(htf_seconds=H1, htf_rsi_len=2))[3]
+    np.testing.assert_allclose(htf, htf_rsi(bars, H1, 2), equal_nan=True)
+
+
+def test_htf_gate_can_only_remove_signals():
+    rng = np.random.default_rng(4)
+    n = 4000
+    close = 2000 + np.cumsum(rng.normal(0, 2, n))
+    open_ = np.r_[close[0], close[:-1]]
+    high = np.maximum(open_, close) + rng.uniform(0.1, 1.5, n)
+    low = np.minimum(open_, close) - rng.uniform(0.1, 1.5, n)
+    bars = Bars(time=1_700_000_000 + np.arange(n, dtype=np.int64) * 300, open=open_, high=high, low=low, close=close)
+    off = run_strategy(bars, P)
+    on = run_strategy(bars, Rsi2SwingParams(htf_seconds=3600))
+    assert 0 < len(on) < len(off)
+    assert set((s.signal_bar, int(s.direction)) for s in on) <= set((s.signal_bar, int(s.direction)) for s in off)
 
 
 def test_run_strategy_smoke_deterministic():
