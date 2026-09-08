@@ -63,7 +63,6 @@ minSlTicks = input.int(0, "Min SL distance (ticks, 0 = off)", minval=0, group=gr
 
 grpViz = "Display"
 showSwings = input.bool(true, "Swing markers + zigzag", group=grpViz)
-showState  = input.bool(true, "Shade ARMED / TRACKING state", group=grpViz)
 showLines  = input.bool(true, "Plot SL / TP of open trade", group=grpViz)
 
 // ------------------------------------------------------------ indicators ----
