@@ -1,0 +1,318 @@
+//@version=6
+// =============================================================================
+//  RSI-FVG Pullback Strategy  (spec: docs/superpowers/specs/2026-09-08-rsi-fvg-pullback-strategy-design.md)
+//
+//  BUY  : RSI crosses above OB (75) -> ARMED. RSI drops below MidHigh (60) -> WAIT (flag on).
+//         Entry trigger (variant A/B/C) while WAIT -> enter, flag cleared. 1 cross = max 1 trade.
+//         A new cross above OB while ARMED/WAIT resets the setup (new anchor).
+//  SELL : mirror with OS (25) / MidLow (40).
+//  SL   : lowest low from anchor bar to signal bar  - AtrMult*ATR   (BUY)
+//         highest high from anchor bar to signal bar + AtrMult*ATR  (SELL)
+//  TP   : TP_R x risk, computed from the REAL fill price (re-armed on the bar after fill).
+//  Fill : signal at bar close -> market order fills at next bar open (Pine default).
+//
+//  Known divergences vs the Python backtest (by design, see spec §5):
+//   1. Pine has no spread model. `slippage` below (~spread/2 in ticks) approximates it.
+//      XAUUSD mintick 0.01, spread ~0.26 -> 13 ticks. Edit the constant for your broker.
+//   2. Pine cannot hedge (net position). `Block opposite while in trade` = true skips
+//      opposite signals; compare with Python `--concurrency single`.
+// =============================================================================
+strategy("RSI-FVG Pullback", shorttitle="RSI-FVG", overlay=true,
+     pyramiding=0, calc_on_every_tick=false, process_orders_on_close=false,
+     initial_capital=10000, currency=currency.USD,
+     commission_type=strategy.commission.cash_per_contract, commission_value=0.035,
+     slippage=13,
+     max_boxes_count=200, max_labels_count=200, max_lines_count=200)
+
+// ---------------------------------------------------------------- inputs ----
+grpEntry = "Entry"
+variant   = input.string("A", "Entry variant", options=["A", "B", "C"], group=grpEntry,
+     tooltip="A = FVG (3 same-colour candles + gap)\nB = RSI reclaims mid level\nC = close breaks pullback pivot")
+tpR       = input.float(3.0, "Take profit (R)", minval=0.1, step=0.5, group=grpEntry)
+riskPct   = input.float(1.0, "Risk % of equity per trade", minval=0.01, step=0.25, group=grpEntry)
+enableBuy = input.bool(true, "Enable BUY", group=grpEntry)
+enableSell= input.bool(true, "Enable SELL", group=grpEntry)
+blockOpp  = input.bool(true, "Block opposite signal while in trade", group=grpEntry,
+     tooltip="true = mimic 'single' concurrency. false = opposite signal reverses the position (Pine is net-position).")
+
+grpRsi = "RSI / ATR"
+rsiLen  = input.int(14, "RSI length", minval=2, group=grpRsi)
+obLvl   = input.float(75, "Overbought", group=grpRsi)
+osLvl   = input.float(25, "Oversold", group=grpRsi)
+midHi   = input.float(60, "Mid high (buy flag)", group=grpRsi)
+midLo   = input.float(40, "Mid low (sell flag)", group=grpRsi)
+atrLen  = input.int(14, "ATR length", minval=1, group=grpRsi)
+atrMult = input.float(1.0, "ATR multiplier for SL", minval=0, step=0.25, group=grpRsi)
+
+grpMisc = "Structure"
+pivLen  = input.int(2, "Pivot length (variant C)", minval=1, group=grpMisc)
+maxWait = input.int(0, "Max bars in WAIT (0 = never expires)", minval=0, group=grpMisc)
+
+grpViz = "Display"
+showFvg   = input.bool(true, "Draw FVG zones", group=grpViz)
+showState = input.bool(true, "Shade ARMED / WAIT state", group=grpViz)
+showLines = input.bool(true, "Plot SL / TP of open trade", group=grpViz)
+
+// ------------------------------------------------------------ indicators ----
+rsi = ta.rsi(close, rsiLen)      // Wilder
+atr = ta.atr(atrLen)             // Wilder RMA of TR
+bool rsiOk = not na(rsi) and not na(rsi[1]) and not na(atr)
+
+// candle colour: 1 green, -1 red, 0 doji
+int col = close > open ? 1 : close < open ? -1 : 0
+
+// FVG on 3 consecutive same-colour candles (C1 = [2], C2 = [1], C3 = [0])
+bool fvgBull = col[2] == 1 and col[1] == 1 and col == 1 and high[2] < low
+bool fvgBear = col[2] == -1 and col[1] == -1 and col == -1 and low[2] > high
+
+// strict pivot (>, <) on both sides, confirmed `len` bars later. Same rule as the Python core.
+f_pivotHigh(int len) =>
+    bool ok = bar_index >= 2 * len
+    if ok
+        float v = high[len]
+        for i = 0 to len - 1
+            if high[i] >= v
+                ok := false
+        for i = len + 1 to 2 * len
+            if high[i] >= v
+                ok := false
+    ok
+
+f_pivotLow(int len) =>
+    bool ok = bar_index >= 2 * len
+    if ok
+        float v = low[len]
+        for i = 0 to len - 1
+            if low[i] <= v
+                ok := false
+        for i = len + 1 to 2 * len
+            if low[i] <= v
+                ok := false
+    ok
+
+bool pivHConf = f_pivotHigh(pivLen)   // bar[pivLen] is a confirmed pivot high
+bool pivLConf = f_pivotLow(pivLen)
+
+// ----------------------------------------------------- BUY state machine ----
+// state: 0 IDLE, 1 ARMED, 2 WAIT
+var int   bState     = 0
+var int   bAnchor    = na
+var int   bWaitStart = na
+var float bRunLow    = na      // lowest low since anchor (inclusive)
+var float bLastPivot = na      // most recent confirmed pivot high formed at/after anchor
+
+bool crossUpOB = rsiOk and rsi[1] <= obLvl and rsi > obLvl
+bool buyTrig   = false
+float buySL    = na
+int   buyWait  = na
+
+// pivot / running-low bookkeeping uses the OLD anchor (same order as Python)
+if bState != 0
+    bRunLow := math.min(bRunLow, low)
+    if pivHConf and not na(bAnchor) and bar_index - pivLen >= bAnchor
+        bLastPivot := high[pivLen]
+
+if rsiOk
+    if bState == 0
+        if crossUpOB
+            bState := 1
+            bAnchor := bar_index
+            bWaitStart := na
+            bRunLow := low
+            bLastPivot := na
+    else if crossUpOB                       // re-cross while ARMED/WAIT -> reset
+        bState := 1
+        bAnchor := bar_index
+        bWaitStart := na
+        bRunLow := low
+        bLastPivot := na
+    else if bState == 1
+        if rsi < midHi
+            bState := 2
+            bWaitStart := bar_index
+    else                                    // WAIT: expiry -> trigger
+        if maxWait > 0 and bar_index - bWaitStart > maxWait
+            bState := 0
+            bAnchor := na
+            bWaitStart := na
+            bRunLow := na
+            bLastPivot := na
+        else if bar_index > bWaitStart
+            bool trig = variant == "A" ? fvgBull :
+                        variant == "B" ? (rsi[1] < midHi and rsi >= midHi) :
+                        (not na(bLastPivot) and close > bLastPivot)
+            if trig
+                buyTrig := true
+                buySL   := bRunLow - atrMult * atr
+                buyWait := bar_index - bWaitStart
+                bState := 0
+                bAnchor := na
+                bWaitStart := na
+                bRunLow := na
+                bLastPivot := na
+
+// ---------------------------------------------------- SELL state machine ----
+var int   sState     = 0
+var int   sAnchor    = na
+var int   sWaitStart = na
+var float sRunHigh   = na
+var float sLastPivot = na
+
+bool crossDnOS = rsiOk and rsi[1] >= osLvl and rsi < osLvl
+bool sellTrig  = false
+float sellSL   = na
+int   sellWait = na
+
+if sState != 0
+    sRunHigh := math.max(sRunHigh, high)
+    if pivLConf and not na(sAnchor) and bar_index - pivLen >= sAnchor
+        sLastPivot := low[pivLen]
+
+if rsiOk
+    if sState == 0
+        if crossDnOS
+            sState := 1
+            sAnchor := bar_index
+            sWaitStart := na
+            sRunHigh := high
+            sLastPivot := na
+    else if crossDnOS
+        sState := 1
+        sAnchor := bar_index
+        sWaitStart := na
+        sRunHigh := high
+        sLastPivot := na
+    else if sState == 1
+        if rsi > midLo
+            sState := 2
+            sWaitStart := bar_index
+    else
+        if maxWait > 0 and bar_index - sWaitStart > maxWait
+            sState := 0
+            sAnchor := na
+            sWaitStart := na
+            sRunHigh := na
+            sLastPivot := na
+        else if bar_index > sWaitStart
+            bool trig = variant == "A" ? fvgBear :
+                        variant == "B" ? (rsi[1] > midLo and rsi <= midLo) :
+                        (not na(sLastPivot) and close < sLastPivot)
+            if trig
+                sellTrig := true
+                sellSL   := sRunHigh + atrMult * atr
+                sellWait := bar_index - sWaitStart
+                sState := 0
+                sAnchor := na
+                sWaitStart := na
+                sRunHigh := na
+                sLastPivot := na
+
+// ------------------------------------------------------------ execution ----
+// Order handling lives here, NOT in the state machine: a trigger always consumes the flag,
+// even if the trade is blocked (same rule as the Python engine).
+var float lSL = na
+var float lTP = na
+var bool  lArm = false        // waiting for fill to re-compute exact TP
+var int   lSigBar = na
+var float sSL = na
+var float sTP = na
+var bool  sArm = false
+var int   sSigBar = na
+
+bool inLong  = strategy.position_size > 0
+bool inShort = strategy.position_size < 0
+
+// drop stale arms (position closed / never opened)
+if lArm and not na(lSigBar) and bar_index > lSigBar and not inLong
+    lArm := false
+if sArm and not na(sSigBar) and bar_index > sSigBar and not inShort
+    sArm := false
+
+// re-arm exit with exact R once the fill price is known
+if lArm and inLong
+    float fillPx = strategy.position_avg_price
+    lTP := fillPx + tpR * (fillPx - lSL)
+    strategy.exit("LX", from_entry="L", stop=lSL, limit=lTP)
+    lArm := false
+if sArm and inShort
+    float fillPx = strategy.position_avg_price
+    sTP := fillPx - tpR * (sSL - fillPx)
+    strategy.exit("SX", from_entry="S", stop=sSL, limit=sTP)
+    sArm := false
+
+string alertJson = na
+
+if buyTrig and enableBuy
+    bool blocked = inLong or (blockOpp and inShort)
+    float slDist = close - buySL
+    if not blocked and slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("L", strategy.long, qty=qty, comment="BUY " + variant)
+        strategy.exit("LX", from_entry="L", stop=buySL, limit=close + tpR * slDist)   // provisional TP, SL live from fill
+        lSL := buySL
+        lTP := close + tpR * slDist
+        lArm := true
+        lSigBar := bar_index
+        alertJson := str.format('{"symbol":"{0}","tf":"{1}","direction":"BUY","variant":"{2}","sl":{3,number,#.#####},"tp_r":{4},"ref_price":{5,number,#.#####},"bars_in_wait":{6}}',
+             syminfo.ticker, timeframe.period, variant, buySL, tpR, close, buyWait)
+    else if blocked
+        label.new(bar_index, low, "BUY blocked", style=label.style_label_up, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+if sellTrig and enableSell
+    bool blocked = inShort or (blockOpp and inLong)
+    float slDist = sellSL - close
+    if not blocked and slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("S", strategy.short, qty=qty, comment="SELL " + variant)
+        strategy.exit("SX", from_entry="S", stop=sellSL, limit=close - tpR * slDist)
+        sSL := sellSL
+        sTP := close - tpR * slDist
+        sArm := true
+        sSigBar := bar_index
+        alertJson := str.format('{"symbol":"{0}","tf":"{1}","direction":"SELL","variant":"{2}","sl":{3,number,#.#####},"tp_r":{4},"ref_price":{5,number,#.#####},"bars_in_wait":{6}}',
+             syminfo.ticker, timeframe.period, variant, sellSL, tpR, close, sellWait)
+    else if blocked
+        label.new(bar_index, high, "SELL blocked", style=label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+if not na(alertJson)
+    alert(alertJson, alert.freq_once_per_bar_close)
+
+
+// --------------------------------------------------------------- visuals ----
+// FVG zones
+if showFvg and fvgBull
+    box.new(bar_index - 2, low, bar_index + 8, high[2], border_color=color.new(color.teal, 60),
+         bgcolor=color.new(color.teal, 85), text="FVG", text_color=color.new(color.teal, 30), text_size=size.tiny)
+if showFvg and fvgBear
+    box.new(bar_index - 2, low[2], bar_index + 8, high, border_color=color.new(color.red, 60),
+         bgcolor=color.new(color.red, 85), text="FVG", text_color=color.new(color.red, 30), text_size=size.tiny)
+
+// state shading: ARMED faint, WAIT stronger
+color bgBuy  = bState == 1 ? color.new(color.green, 94) : bState == 2 ? color.new(color.green, 85) : na
+color bgSell = sState == 1 ? color.new(color.red, 94)   : sState == 2 ? color.new(color.red, 85)   : na
+bgcolor(showState ? bgBuy : na, title="BUY state")
+bgcolor(showState ? bgSell : na, title="SELL state")
+
+// entry markers
+plotshape(buyTrig and enableBuy,  title="BUY signal",  style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.small, text="B")
+plotshape(sellTrig and enableSell, title="SELL signal", style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.small, text="S")
+
+// SL / TP of the open trade
+float plotSL = inLong ? lSL : inShort ? sSL : na
+float plotTP = inLong ? lTP : inShort ? sTP : na
+plot(showLines ? plotSL : na, "SL", color=color.new(color.red, 0),   style=plot.style_linebr, linewidth=1)
+plot(showLines ? plotTP : na, "TP", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+
+// tiny status table
+var table tbl = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islast
+    string bTxt = bState == 0 ? "idle" : bState == 1 ? "ARMED" : "WAIT " + str.tostring(bar_index - bWaitStart) + "b"
+    string sTxt = sState == 0 ? "idle" : sState == 1 ? "ARMED" : "WAIT " + str.tostring(bar_index - sWaitStart) + "b"
+    table.cell(tbl, 0, 0, "RSI", text_size=size.small)
+    table.cell(tbl, 1, 0, str.tostring(rsi, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 1, "BUY",  text_size=size.small, text_color=color.green)
+    table.cell(tbl, 1, 1, bTxt, text_size=size.small)
+    table.cell(tbl, 0, 2, "SELL", text_size=size.small, text_color=color.red)
+    table.cell(tbl, 1, 2, sTxt, text_size=size.small)
