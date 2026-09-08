@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from ..params import SymbolSpec
@@ -15,6 +16,8 @@ log = logging.getLogger(__name__)
 RATE_COLUMNS = ["time", "open", "high", "low", "close", "tick_volume", "spread"]
 _TF_ATTR = {"M1": "TIMEFRAME_M1", "M5": "TIMEFRAME_M5", "M15": "TIMEFRAME_M15", "M30": "TIMEFRAME_M30",
             "H1": "TIMEFRAME_H1", "H4": "TIMEFRAME_H4", "D1": "TIMEFRAME_D1"}
+TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}
+TRIM_WINDOW = 200
 
 
 def _mt5():
@@ -51,6 +54,60 @@ def fetch_symbol_spec(symbol: str) -> SymbolSpec:
                       stops_level_points=int(si.trade_stops_level))
 
 
+def _usable_range(df: pd.DataFrame) -> str:
+    if df.empty:
+        return "empty"
+    a = datetime.fromtimestamp(int(df["time"].iloc[0]), tz=timezone.utc)
+    b = datetime.fromtimestamp(int(df["time"].iloc[-1]), tz=timezone.utc)
+    return f"{a:%Y-%m-%d %H:%M} -> {b:%Y-%m-%d %H:%M} UTC"
+
+
+def trim_to_timeframe(df: pd.DataFrame, tf: str, window: int = TRIM_WINDOW) -> tuple[pd.DataFrame, int]:
+    """Drop a leading block of bars whose spacing does not match `tf`.
+
+    MT5 serves a prefix of coarser bars (daily, then a stretch of H1) ahead of the genuine
+    intraday history for XAUUSDc: ~924 daily bars for 2014-01 -> 2017-01 with
+    ``tick_volume == 1``, ``spread == 0`` and 00:00 timestamps. Feeding those to an intraday
+    strategy silently corrupts every indicator, so they are cut off.
+
+    Genuine data is recognised as the first index whose spacing is exactly ``TF_SECONDS[tf]``
+    and whose next `window` spacings (or all remaining, if fewer) are *mostly* that spacing:
+    at least half equal it exactly and at most a quarter exceed ``3 * TF_SECONDS[tf]``.
+
+    Note the last clause is a deliberate relaxation of "no spacing exceeds 3x the timeframe":
+    XAUUSD has a ~1h daily session break and a weekend gap, so on M15 (200 bars = 50 h) and
+    H1 (200 bars = 200 h) *no* window can avoid an oversized spacing and the strict form
+    trims the whole file away. Anchoring on ``d[i] == tf_seconds`` is what keeps the boundary
+    exact: it rejects any index still inside the daily prefix.
+
+    Returns the trimmed frame (index reset) and the number of dropped rows.
+    """
+    tfs = TF_SECONDS[tf.upper()]
+    if len(df) < 2:
+        return df, 0
+    d = np.diff(df["time"].to_numpy(dtype="int64"))
+    n = len(d)
+    idx = np.arange(n)
+    wlen = np.minimum(window, n - idx)
+    exact_cs = np.r_[0, np.cumsum(d == tfs)]
+    big_cs = np.r_[0, np.cumsum(d > 3 * tfs)]
+    ends = idx + wlen
+    n_exact = exact_cs[ends] - exact_cs[idx]
+    n_big = big_cs[ends] - big_cs[idx]
+    ok = (d == tfs) & (n_exact * 2 >= wlen) & (n_big * 4 <= wlen)
+    if not ok.any():
+        log.warning("%s: no run of %d bars matches the %ds spacing — left untrimmed (%d rows, %s)",
+                    tf, window, tfs, len(df), _usable_range(df))
+        return df, 0
+    start = int(np.argmax(ok))
+    if start == 0:
+        return df, 0
+    out = df.iloc[start:].reset_index(drop=True)
+    log.warning("%s: dropped %d leading bars whose spacing != %ds (MT5 served coarser bars first); "
+                "usable range %s", tf, start, tfs, _usable_range(out))
+    return out, start
+
+
 def fetch_rates(symbol: str, tf: str, start: datetime | None = None, chunk: int = 50_000) -> pd.DataFrame:
     mt5 = _mt5()
     tfc = tf_constant(tf)
@@ -79,6 +136,7 @@ def fetch_rates(symbol: str, tf: str, start: datetime | None = None, chunk: int 
     if suspect_cap:
         log.warning("%s %s: history ended exactly on a full chunk (%d bars) — may be capped by the terminal's "
                     "'Max bars in chart' setting (Tools > Options > Charts).", symbol, tf, chunk)
+    out, _ = trim_to_timeframe(out, tf)
     return out
 
 
@@ -92,6 +150,10 @@ def load_or_fetch(symbol: str, tf: str, data_dir: Path, refresh: bool = False, s
     pq, sj = cache_paths(data_dir, symbol, tf)
     if pq.exists() and not refresh:
         df = pd.read_parquet(pq)
+        df, dropped = trim_to_timeframe(df, tf)
+        if dropped:
+            df.to_parquet(pq, index=False)   # persist the fix so the cache is clean from now on
+            log.warning("%s: rewrote cache without the %d mismatched leading bars", pq.name, dropped)
         if sj.exists():
             spec = SymbolSpec.from_dict(json.loads(sj.read_text(encoding="utf-8")))
         else:

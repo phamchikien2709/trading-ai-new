@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from rsi_fvg.bars import Bars
 
@@ -26,3 +27,18 @@ def test_slice(mk_closes):
     b = mk_closes([1, 2, 3, 4, 5])
     s = b.slice(1, 3)
     assert len(s) == 2 and list(s.close) == [2.0, 3.0]
+
+
+def _arr(n):
+    return np.arange(n, dtype=np.float64)
+
+
+def test_mismatched_array_lengths_rejected():
+    with pytest.raises(ValueError, match="equal length"):
+        Bars(time=np.arange(4, dtype=np.int64), open=_arr(3), high=_arr(3), low=_arr(3), close=_arr(3))
+    with pytest.raises(ValueError, match="equal length"):
+        Bars(time=np.arange(3, dtype=np.int64), open=_arr(3), high=_arr(3), low=_arr(3), close=_arr(3),
+             spread=np.arange(2, dtype=np.int64))
+    ok = Bars(time=np.arange(3, dtype=np.int64), open=_arr(3), high=_arr(3), low=_arr(3), close=_arr(3),
+              spread=np.arange(3, dtype=np.int64))
+    assert len(ok) == 3

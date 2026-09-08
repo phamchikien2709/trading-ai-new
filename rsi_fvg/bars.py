@@ -17,6 +17,15 @@ class Bars:
     close: np.ndarray
     spread: np.ndarray | None = None
 
+    def __post_init__(self) -> None:
+        n = len(self.close)
+        lengths = {"time": len(self.time), "open": len(self.open), "high": len(self.high),
+                   "low": len(self.low), "close": n}
+        if self.spread is not None:
+            lengths["spread"] = len(self.spread)
+        if len(set(lengths.values())) > 1:
+            raise ValueError(f"Bars arrays must have equal length, got {lengths}")
+
     def __len__(self) -> int:
         return int(self.close.shape[0])
 
