@@ -25,7 +25,15 @@ Không nằm trong phạm vi: luật vào/ra, backtest P&L, tầng micro 22.5m /
 
 **Kết luận đó đúng với RSI2 và RSI-FVG, và sai hoàn toàn với Quarterly Theory.** Mọi biên quarter là một mốc giờ treo tường New York. Lệch một giờ nghĩa là backtest một lý thuyết khác.
 
-Và lệch không phải hằng số. DST của Mỹ bắt đầu Chủ nhật thứ 2 tháng 3, của EU Chủ nhật cuối tháng 3 ⇒ khoảng **3 tuần** offset là 6 giờ chứ không phải 7. DST Mỹ kết thúc Chủ nhật đầu tháng 11, EU Chủ nhật cuối tháng 10 ⇒ khoảng **1 tuần** offset là 8. Trừ cứng −7 sẽ sai **~4 tuần mỗi năm**.
+Và lệch không phải hằng số. Offset server→NY bình thường là **7 giờ** (Athens UTC+3 với NY UTC−4 vào hè, UTC+2 với UTC−5 vào đông), nhưng rơi xuống **6 giờ** trong hai cửa sổ mỗi năm khi hai vùng đổi DST vào ngày khác nhau:
+
+| Cửa sổ | Athens | New York | Offset |
+|---|---|---|---|
+| CN thứ 2 tháng 3 → CN cuối tháng 3 (~3 tuần) | EET, UTC+2 | EDT, UTC−4 | **6** |
+| CN cuối tháng 10 → CN đầu tháng 11 (~1 tuần) | EET, UTC+2 | EDT, UTC−4 | **6** |
+| còn lại | +2 hoặc +3 | −5 hoặc −4 | 7 |
+
+**Không tồn tại offset 8.** Offset 8 đòi Athens đang giờ hè (UTC+3) trong khi NY đang giờ đông (UTC−5), tức EU đã vào DST mà Mỹ thì chưa. Điều đó không bao giờ xảy ra: giai đoạn DST của EU (CN cuối tháng 3 → CN cuối tháng 10) nằm **hoàn toàn bên trong** giai đoạn DST của Mỹ (CN thứ 2 tháng 3 → CN đầu tháng 11). Trừ cứng −7 sẽ sai **~4 tuần mỗi năm**, luôn sai theo cùng một hướng và luôn đúng một giờ.
 
 Cách đúng: epoch → naive datetime → gán `Europe/Athens` → convert `America/New_York`. `zoneinfo`/`pandas` xử lý cả hai chế độ DST.
 
@@ -125,7 +133,7 @@ Ghi vào `results/quarters_study/<YYYY-MM-DD>/`:
 Khác hẳn phần Pine của Phase trước: **đây là code test được thật**, hàm thuần, `pytest` chạy được. TDD áp dụng đúng nghĩa.
 
 1. **Bảng mốc giờ NY → chỉ số quarter.** Dùng lại bảng đã kiểm tay khi làm indicator Pine (spec kia §8 và plan Task 1): 18:00→(0,0), 19:30→(0,1), 23:59→(0,3), 00:00→(1,0), 01:30→(1,1), 06:00→(2,0), 07:30→(2,1), 12:00→(3,0), 13:30→(3,1), 17:59→(3,3).
-2. **DST lệch EU/Mỹ.** Một timestamp ngày **2026-03-10** (Mỹ đã vào DST từ 08/03, EU chưa tới 29/03): offset server→NY phải là **6 giờ**, không phải 7. Và một timestamp ngày 2026-10-28 (EU đã ra DST từ 25/10, Mỹ chưa tới 01/11): offset phải là **8**.
+2. **DST lệch EU/Mỹ — cả hai cửa sổ đều cho offset 6.** Timestamp ngày **2026-03-10** (Mỹ vào DST 08/03, EU chưa tới 29/03): offset server→NY phải là **6 giờ**, không phải 7. Timestamp ngày **2026-10-28** (EU ra DST 25/10, Mỹ chưa tới 01/11): cũng phải là **6**. Thêm một mốc giữa hè (2026-07-01) và một mốc giữa đông (2026-01-15) để chốt offset **7** ở trạng thái bình thường. Test phải khẳng định **không mốc nào cho offset 8** — xem §2 về lý do 8 là bất khả.
 3. **`trading_day` qua nửa đêm — chỗ dễ cài sai nhất.** Bar lúc 23:00 NY ngày `D` và bar lúc 01:00 NY ngày `D+1` phải cho **cùng một `trading_day` = `D`**, vì cả hai thuộc chu kỳ khởi đầu 18:00 ngày `D`. Bar 23:00 lấy ngày của chính nó (giờ ≥ 18); bar 01:00 lấy ngày trước (giờ < 18). Cùng chu kỳ, `q_index` khác nhau: 0 và 1. Test cả `trading_day` bằng nhau **và** `q_index` khác nhau — chỉ test một trong hai sẽ không bắt được lỗi lệch ngày.
 4. **`anchor_offset` dịch biên đúng lượng truyền vào.** Gán nhãn với `offset = 5400` phải cho `q_index` bằng đúng nhãn của `offset = 0` dịch đi một quarter ở tầng q90.
 5. **`server_to_ny` raise** trên timestamp nonexistent và ambiguous tổng hợp (không lấy từ dữ liệu thật).
