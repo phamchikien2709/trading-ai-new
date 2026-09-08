@@ -14,13 +14,16 @@ from plotly.subplots import make_subplots
 
 from .engine import BacktestResult
 from .metrics import monthly_table
-from .optimize import KEY_COLS
+from .optimize import FILTER_TEXT, KEY_COLS
 
 GRID_FIRST_COLS = KEY_COLS + ["n_signals", "n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct",
-                              "net_pnl", "final_equity", "is_n_trades", "is_avg_r", "oos_n_trades", "oos_avg_r",
-                              "robust_r", "robust_ratio", "flags"]
-REC_COLS = ["n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct", "net_pnl",
-            "is_n_trades", "is_avg_r", "oos_n_trades", "oos_avg_r", "robust_r", "robust_ratio"]
+                              "net_pnl", "final_equity", "ruined", "oversized_share", "capped_share",
+                              "is_n_trades", "is_avg_r", "is_max_dd_pct", "oos_n_trades", "oos_avg_r",
+                              "oos_max_dd_pct", "robust_r", "robust_ratio", "grid_edge", "flags"]
+REC_COLS = ["n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct", "net_pnl", "ruined",
+            "oversized_share", "capped_share", "is_n_trades", "is_avg_r", "oos_n_trades", "oos_avg_r",
+            "robust_r", "robust_ratio", "grid_edge"]
+FLAG_NAMES = "ruined, n&lt;30, oos_sign_flip, buy_sell_imbalance, oversized, capped, grid_edge"
 EQUITY_MAX_ROWS = 20_000
 _RED, _WHITE, _GREEN = "F8696B", "FFFFFF", "63BE7B"
 
@@ -65,24 +68,36 @@ def _strip_tz(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def _downsample(eq: pd.Series, max_rows: int = EQUITY_MAX_ROWS) -> pd.Series:
-    step = max(1, int(np.ceil(len(eq) / max_rows)))
-    return eq.iloc[::step]
+def _downsample(obj, max_rows: int = EQUITY_MAX_ROWS):
+    step = max(1, int(np.ceil(len(obj) / max_rows)))
+    return obj.iloc[::step]
 
 
-def _equity_frame(res: BacktestResult) -> pd.DataFrame:
-    eq = _downsample(res.equity)
+def _drawdown_frame(eq: pd.Series) -> pd.DataFrame:
+    """equity + running drawdown, computed on the FULL curve.
+
+    Downsampling first drops the very bars that make the peaks and troughs, so the reported
+    drawdown came out shallower than the run's real one — take the drawdown first, thin the
+    result afterwards.
+    """
     peak = eq.cummax()
-    idx = eq.index.tz_localize(None) if eq.index.tz is not None else eq.index
-    return pd.DataFrame({"time": idx, "equity": eq.values, "drawdown_usd": (peak - eq).values,
-                         "drawdown_pct": ((peak - eq) / peak * 100).values})
+    dd = peak - eq
+    return pd.DataFrame({"equity": eq, "drawdown_usd": dd,
+                         "drawdown_pct": (dd / peak.replace(0, np.nan)).fillna(0.0) * 100.0})
+
+
+def _equity_frame(res: BacktestResult, max_rows: int = EQUITY_MAX_ROWS) -> pd.DataFrame:
+    d = _downsample(_drawdown_frame(res.equity), max_rows)
+    idx = d.index.tz_localize(None) if d.index.tz is not None else d.index
+    return pd.DataFrame({"time": idx, "equity": d["equity"].values,
+                         "drawdown_usd": d["drawdown_usd"].values, "drawdown_pct": d["drawdown_pct"].values})
 
 
 def _rec_table(rec: dict) -> pd.DataFrame:
     rows = []
     for tf, r in rec.items():
         if r is None:
-            rows.append({"tf": tf, "status": "no reliable parameter set (filters: IS n>=30, IS & OOS avg R > 0, oversized <= 10%)"})
+            rows.append({"tf": tf, "status": f"no reliable parameter set (filters: {FILTER_TEXT})"})
         else:
             row = {"tf": tf, "status": "recommended"}
             row.update({k: r["params"][k] for k in KEY_COLS if k != "tf"})
@@ -114,6 +129,8 @@ def write_csvs(out_dir: Path, grid_df: pd.DataFrame, rec_results: dict[str, Back
     _order_grid(grid_df).to_csv(out_dir / "grid.csv", index=False)
     for tf, res in rec_results.items():
         res.trades.to_csv(out_dir / f"trades_{tf}.csv", index=False)
+        if len(res.skipped):
+            res.skipped.to_csv(out_dir / f"skipped_{tf}.csv", index=False)
 
 
 def _color_scale(ws, col_letter: str, first_row: int, last_row: int) -> None:
@@ -135,8 +152,9 @@ def write_xlsx(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[s
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     grid = _order_grid(grid_df.copy())
-    if "split_time" in grid.columns:
-        grid["split_time"] = pd.to_datetime(grid["split_time"]).dt.tz_localize(None)
+    for col in ("split_time", "ruin_time"):
+        if col in grid.columns:
+            grid[col] = pd.to_datetime(grid[col], utc=True).dt.tz_localize(None)
     with pd.ExcelWriter(path, engine="openpyxl") as xw:
         info = _info_table(run_info)
         info.to_excel(xw, sheet_name="Summary", index=False, startrow=0)
@@ -195,16 +213,15 @@ th{background:#f0efec} td:first-child,th:first-child{text-align:left}
 
 
 def _fig_equity(tf: str, res: BacktestResult) -> go.Figure:
-    eq = _downsample(res.equity, 5000)
-    peak = eq.cummax()
-    dd_pct = ((peak - eq) / peak * 100)
+    d = _downsample(_drawdown_frame(res.equity), 5000)      # drawdown from the full curve (M3)
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, row_heights=[0.7, 0.3], vertical_spacing=0.04)
-    fig.add_trace(go.Scatter(x=eq.index, y=eq.values, name="Equity",
+    fig.add_trace(go.Scatter(x=d.index, y=d["equity"].values, name="Equity",
                              line=dict(width=2, color=_SERIES_BLUE)), row=1, col=1)
-    fig.add_trace(go.Scatter(x=dd_pct.index, y=-dd_pct.values, name="Drawdown %", fill="tozeroy",
+    fig.add_trace(go.Scatter(x=d.index, y=-d["drawdown_pct"].values, name="Drawdown %", fill="tozeroy",
                              line=dict(width=2, color=_SERIES_RED),
                              fillcolor="rgba(227,73,72,0.12)"), row=2, col=1)
-    fig.update_layout(title=f"{tf} — Equity & drawdown (recommended parameters)", height=520,
+    ruin = " · RUINED" if res.ruined else ""
+    fig.update_layout(title=f"{tf} — Equity & drawdown (recommended parameters){ruin}", height=520,
                       margin=dict(l=40, r=20, t=50, b=30), legend=dict(orientation="h"))
     fig.update_yaxes(title_text="Equity (USD)", row=1, col=1)
     fig.update_yaxes(title_text="Drawdown (%)", row=2, col=1)
@@ -291,11 +308,14 @@ def write_html(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[s
     for tf, r in rec.items():
         if r is None:
             parts.append(f"<div class='rec none'><b>{e(tf)}</b>: no reliable parameter set. "
-                         "No combo passed: IS n ≥ 30, IS avg R > 0, OOS avg R > 0, oversized ≤ 10%.</div>")
+                         f"No combo passed: {e(FILTER_TEXT)}.</div>")
         else:
-            p = r["params"]
+            p, row = r["params"], r["row"]
             parts.append(f"<div class='rec'><b>{e(tf)}</b>: TP <b>{p['tp_r']:g}R</b>, ATR mult <b>{p['atr_mult']:g}</b>, "
                          f"RSI14 <b>{p['ob']:g}/{p['os']:g}</b>, RSI2 <b>{p['f_hi']:g}/{p['f_lo']:g}</b>"
+                         f"<br>net P&amp;L <b>${row['net_pnl']:,.0f}</b> · profit factor <b>{row['profit_factor']:.2f}</b> · "
+                         f"max drawdown <b>{row['max_dd_pct']:.1%}</b> · capped lots "
+                         f"<b>{row.get('capped_share', 0.0):.0%}</b>"
                          f"<br><span class='muted'>{e(r['reason'])}</span></div>")
 
     for tf, res in rec_results.items():
@@ -307,8 +327,9 @@ def write_html(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[s
         parts.append(f"<h2>{e(tf)} — parameter grid</h2>")
         parts.append(fig_html(_fig_heatmaps(tf, g)))
         parts.append(fig_html(_fig_is_oos(tf, g)))
-        top = g.sort_values(["oos_avg_r", "is_avg_r"], ascending=False).head(10)
-        parts.append("<h3>Top 10 by OOS avg R</h3>")
+        # Ranked on what recommend() actually scores (IS + robustness); OOS is only a gate.
+        top = g.sort_values(["is_avg_r", "robust_r"], ascending=False).head(10)
+        parts.append("<h3>Top 10 by IS avg R (then robustness) — the ranking the recommendation uses</h3>")
         parts.append(_fmt_table(top, [c for c in GRID_FIRST_COLS if c in top.columns]))
 
     parts.append("<h2>Warnings</h2>")
@@ -317,7 +338,7 @@ def write_html(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[s
         parts.append("<p>none</p>")
     else:
         parts.append(f"<p class='warn'>{len(flagged)} of {len(grid_df)} combos carry flags "
-                     "(n&lt;30, oos_sign_flip, buy_sell_imbalance, oversized). See the Grid sheet / grid.csv.</p>")
+                     f"({FLAG_NAMES}). See the Grid sheet / grid.csv.</p>")
         counts = flagged["flags"].str.split(";").explode().value_counts()
         parts.append(_fmt_table(counts.rename_axis("flag").reset_index(name="combos"), ["flag", "combos"]))
 

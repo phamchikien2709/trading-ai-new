@@ -1,10 +1,10 @@
-from pathlib import Path
-
 import numpy as np
 import openpyxl
 import pandas as pd
+import pytest
 
-from rsi_fvg.backtest.export import write_csvs, write_html, write_xlsx
+from rsi_fvg.backtest.engine import run_backtest
+from rsi_fvg.backtest.export import _equity_frame, write_csvs, write_html, write_xlsx
 from rsi_fvg.backtest.optimize import GridSpec, recommend, run_optimization, run_single
 from rsi_fvg.bars import Bars
 from rsi_fvg.params import CostParams, SizingParams, SymbolSpec
@@ -44,6 +44,37 @@ def test_write_csvs(tmp_path):
     write_csvs(tmp_path, df, res)
     assert (tmp_path / "grid.csv").exists() and (tmp_path / "trades_M5.csv").exists()
     assert len(pd.read_csv(tmp_path / "grid.csv")) == 4
+    grid = pd.read_csv(tmp_path / "grid.csv")
+    for c in ("ruined", "capped_share", "grid_edge", "is_max_dd_pct", "oos_max_dd_pct"):
+        assert c in grid.columns
+
+
+def test_write_csvs_emits_skipped_only_when_non_empty(tmp_path):
+    df, _, res, _ = _fixture()
+    r = res["M5"]
+    assert r.skipped.empty
+    write_csvs(tmp_path, df, res)
+    assert not (tmp_path / "skipped_M5.csv").exists()          # nothing to say, no file
+    r.skipped = pd.DataFrame([{"time": pd.Timestamp("2024-01-01", tz="UTC"),
+                               "signal_time": pd.Timestamp("2024-01-01", tz="UTC"),
+                               "direction": "BUY", "variant": "SWING", "reason": "blocked"}])
+    write_csvs(tmp_path, df, res)
+    assert (tmp_path / "skipped_M5.csv").exists()
+    assert len(pd.read_csv(tmp_path / "skipped_M5.csv")) == 1
+
+
+def test_equity_frame_drawdown_uses_the_full_curve():
+    # M3: the peak lands on bar 201, which a 1-in-20 downsample drops. Taking the drawdown
+    # after thinning would never see it and would report no drawdown at all.
+    b = _bars(400)
+    res = run_backtest(b, [], 1.0, SPEC, COSTS, SIZING)
+    vals = np.full(400, 10_000.0)
+    vals[201] = 20_000.0
+    res.equity = pd.Series(vals, index=res.equity.index)
+    frame = _equity_frame(res, max_rows=20)
+    assert len(frame) <= 21
+    assert frame["drawdown_usd"].max() == pytest.approx(10_000.0)
+    assert frame["drawdown_pct"].max() == pytest.approx(50.0)
 
 
 def test_write_xlsx_sheets_and_rows(tmp_path):
@@ -56,6 +87,29 @@ def test_write_xlsx_sheets_and_rows(tmp_path):
     head = [c.value for c in next(wb["Grid"].iter_rows(min_row=1, max_row=1))]
     assert head[:7] == ["tf", "ob", "os", "f_hi", "f_lo", "atr_mult", "tp_r"]
     assert wb["Equity_M5"].max_row <= 20_001   # downsampled
+
+
+def _rec_for(df):
+    """A recommendation dict for row 0, as recommend() would return it (random-walk bars
+    never clear the profit gates, so the 'recommended' branch needs a hand-built pick)."""
+    from rsi_fvg.backtest.optimize import KEY_COLS, _reason
+    best = df.iloc[0]
+    return {"M5": {"params": {k: (best[k] if k == "tf" else float(best[k])) for k in KEY_COLS},
+                   "score": 1.23, "row": best.to_dict(), "reason": _reason(best)}}
+
+
+def test_reports_show_cash_metrics_for_a_recommended_combo(tmp_path):
+    df, _, res, info = _fixture()
+    rec = _rec_for(df)
+    write_xlsx(tmp_path / "r.xlsx", df, rec, res, info)
+    wb = openpyxl.load_workbook(tmp_path / "r.xlsx", read_only=True)
+    head = [c.value for row in wb["Summary"].iter_rows() for c in row if isinstance(c.value, str)]
+    for col in ("net_pnl", "profit_factor", "max_dd_pct", "capped_share", "ruined"):
+        assert col in head, f"{col} missing from the Summary recommendation table"
+    write_html(tmp_path / "r.html", df, rec, res, info)
+    html = (tmp_path / "r.html").read_text(encoding="utf-8")
+    for token in ("net P&amp;L", "profit factor", "max drawdown", "capped lots"):
+        assert token in html
 
 
 def test_write_xlsx_handles_no_recommendation(tmp_path):
