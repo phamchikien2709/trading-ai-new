@@ -3,7 +3,7 @@
 Two of the three variants are run-level switches rather than grid axes: `min_sl_spread_mult`
 (V2) is an argument here, and the HTF trend gate (V3) travels on `base.htf_seconds`. Both are
 recorded on every row (`min_sl_mult`, `n_rejected_min_sl`, `htf_seconds`) so a saved grid says
-which filters produced it. The fast-RSI length (V1) *is* an axis: see `GridSpec.rsi_fast`.
+which filters produced it. The fast-RSI length (V1) is one of the strategy adapter's axes, reachable as `grid.axes["rsi_fast"]`.
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ W_IS_AVG_R = 0.6
 W_ROBUST_R = 0.4
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)  # eq=False: identity-based equality/hash, not structural (axes dict is unhashable)
 class GridSpec:
     """Grid as {axis name: values} plus the TP axis (spec §3.2).
 

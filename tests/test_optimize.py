@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rsi_fvg.backtest.optimize import (MIN_TRADES, SPLIT_KEYS, GridSpec, _segment_metrics, add_robustness,
+from rsi_fvg.backtest.optimize import (SPLIT_KEYS, GridSpec, _segment_metrics, add_robustness,
                                        compute_flags, make_params, recommend, run_optimization, run_single,
                                        split_time)
 from rsi_fvg.bars import Bars
@@ -271,3 +271,12 @@ def test_grid_columns_come_from_the_adapter():
         assert c in df.columns
     assert df["rsi_fast"].dtype.kind == "i"
     assert list(df.columns[:len(KEY_COLS) - 1]) == KEY_COLS[:-1] or set(KEY_COLS) <= set(df.columns)
+
+
+def test_gridspec_is_immutable_and_hashable_by_identity():
+    from dataclasses import FrozenInstanceError
+    g = GridSpec.for_strategy(ADAPTER)
+    with pytest.raises(FrozenInstanceError):
+        g.tp_r = (1.0,)
+    assert hash(g) == hash(g)               # identity hash, not a TypeError
+    assert g != GridSpec.for_strategy(ADAPTER)   # eq=False -> identity comparison
