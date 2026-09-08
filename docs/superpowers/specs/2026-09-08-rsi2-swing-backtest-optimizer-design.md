@@ -60,6 +60,12 @@ Rsi2SwingParams:
 ### 2.5 Fill / SL / TP / sizing / chi phí / concurrency
 Y nguyên spec RSI-FVG §2.6–2.8. Mặc định lần này: `risk_pct = 5.0`, `tp_r = 2.0`, `concurrency = hedge` (có `single` để so với Pine).
 
+Bổ sung của engine (`run_backtest`):
+- **Thứ tự exit trong 1 bar**: kiểm tra **open trước** — bar gap thẳng qua TP thì ăn TP dù range của nó cũng chạm SL. Chỉ khi open nằm giữa SL và TP mới xét intrabar, và ở đó SL thắng (giả định thận trọng, OHLC 1 bar không cho biết mức nào bị chạm trước).
+- **Ruin floor** (`ruin_floor_pct`, mặc định 0.10): khi equity mark tại close của một bar tụt xuống ≤ 10% vốn ban đầu → đóng hết vị thế tại close đó với `exit_reason = "ruin"`, ngừng nhận fill, equity phẳng đến hết. `BacktestResult` có `ruined` / `ruin_time`. Không có nó, engine sizing trên số dư âm (`lots_for_risk` trả min-lot) và báo DD > 100%.
+- **Sizing flags**: `lots_for_risk` trả `(lots, oversized, capped)`. `oversized` = bị nâng lên `min_lot` (risk **cao hơn** cấu hình); `capped` = bị chặn bởi `max_lot` (risk **thấp hơn** cấu hình). Cả hai đi vào trade log.
+- **Sai lệch có chủ ý**: TP là limit fill nên **không** trừ slippage; SL và entry thì có.
+
 ---
 
 ## 3. Metrics bổ sung (thêm vào `metrics.compute_metrics`)
@@ -89,15 +95,18 @@ atr_mult  ∈ {0, 0.5, 1, 1.5, 2}
 
 ### 4.2 Đánh giá
 - **IS/OOS**: chia theo thời gian, IS = 70% đầu, OOS = 30% cuối. Backtest chạy trên toàn bộ data; metrics tính riêng cho lệnh có `entry_time` trước/sau mốc chia. Không tối ưu lại trên OOS.
+  - `is_max_dd_pct` / `oos_max_dd_pct` lấy từ **đường equity thật** cắt tại mốc chia (`dd = 1 - eq/eq.cummax()` trên đoạn đó, đỉnh reset ở đầu đoạn) — **không** dựng lại equity từ trade của đoạn rồi tính DD trên vốn ban đầu. Các cột còn lại (`n_trades`, `win_rate`, `avg_r`, `profit_factor`, `net_pnl`, `expectancy_usd`) vẫn là tổng theo trade trong đoạn.
 - **Xếp hạng chính**: `is_expectancy_r` (avg R) với điều kiện `is_n_trades ≥ 30`. Cột OOS luôn hiển thị cạnh.
-- **Robustness score**: với mỗi combo, lấy các combo lân cận trong grid (±1 bước ở `tp_r` và `atr_mult`, cùng bộ RSI) → `robust_r = median(is_avg_r của lân cận)`; `robust_ratio = robust_r / is_avg_r` (kẹp [0, 1.5]). Đỉnh nhọn có ratio thấp.
-- **Cờ**: `n<30`, `oos_sign_flip` (IS > 0 nhưng OOS < 0), `buy_sell_imbalance` (tỉ lệ > 2), `oversized_share > 10%` (nhiều lệnh dùng min-lot vượt risk).
+- **Robustness score**: với mỗi combo, lấy các combo lân cận trong grid (±1 bước ở `tp_r` và `atr_mult`, **cùng cả 4 mức RSI** `ob/os/f_hi/f_lo`) → `robust_r = median(is_avg_r của lân cận)`; `robust_ratio = robust_r / is_avg_r` (kẹp [0, 1.5]). Đỉnh nhọn có ratio thấp. Combo `ruined` bị loại khỏi pool lân cận và tự nhận `robust_r = 0`.
+- **Cờ**: `ruined` (cháy tài khoản, xem §2.5), `n<30`, `oos_sign_flip` (IS > 0 nhưng OOS < 0), `buy_sell_imbalance` (tỉ lệ > 2), `oversized_share > 10%` (nhiều lệnh dùng min-lot vượt risk), `capped_share > 10%` (nhiều lệnh bị chặn bởi `max_lot` nên risk thực thấp hơn cấu hình), `grid_edge` (`tp_r` hoặc `atr_mult` nằm ở đầu/cuối grid — chưa thấy được đỉnh nào ở phía ngoài).
 
 ### 4.3 Khuyến nghị tự động
-1. Lọc combo: `is_n_trades ≥ 30`, `is_avg_r > 0`, `oos_avg_r > 0`, không cờ `oversized`.
-2. Điểm = `0.5 × oos_avg_r + 0.3 × robust_r + 0.2 × is_avg_r` (chuẩn hóa z-score trong TF).
+1. Lọc combo — phải **có lãi bằng tiền**, không chỉ dương R (107/675 combo của lần chạy đầu có `avg_r > 0` mà `net_pnl < 0`; bản M5 từng chọn lỗ $2,773 với DD 93.7%):
+   `not ruined`, `is_n_trades ≥ 30`, `is_avg_r > 0`, `oos_avg_r > 0`, `oos_n_trades ≥ 10`,
+   `net_pnl > 0`, `profit_factor > 1.0`, `max_dd_pct ≤ 0.50`, `oversized_share ≤ 0.10`, `capped_share ≤ 0.50`.
+2. Điểm = `0.6 × z(is_avg_r) + 0.4 × z(robust_r)` (z-score trong TF). **OOS chỉ là cổng đậu/trượt** (`oos_avg_r > 0`, `oos_n_trades ≥ 10`), không tính điểm — cho OOS 50% trọng số chính là "tối ưu lại trên OOS" mà §4.2 cấm.
 3. Chọn top-1 mỗi TF; nếu không combo nào qua lọc → ghi rõ "không có bộ tham số đáng tin trên TF này" thay vì gợi ý ép.
-4. Lý do in kèm: n lệnh IS/OOS, avg R hai bên, robust ratio, DD, win rate, BUY/SELL split.
+4. Lý do in kèm: `net_pnl`, `profit_factor`, `max_dd_pct`, n lệnh IS/OOS, avg R hai bên, robust_r, win rate, BUY/SELL split, `capped_share` (nếu > 0) và ghi chú `(grid edge)` khi combo được chọn nằm ở biên grid.
 
 Đây là nội dung mục **Recommendation** trong cả xlsx và html.
 
