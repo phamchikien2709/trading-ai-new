@@ -95,7 +95,10 @@ def main() -> int:
         print(f"  tp_r       -> default {adapter.default_tp_r}")
         return 0
 
-    axes = dict(parse_axis(t) for t in a.axis)
+    try:
+        axes = dict(parse_axis(t) for t in a.axis)
+    except argparse.ArgumentTypeError as e:
+        ap.error(str(e))
     try:
         grid = GridSpec.for_strategy(adapter, axes=axes or None, tp_r=a.tp)   # raises KeyError on a bad axis
     except KeyError as e:

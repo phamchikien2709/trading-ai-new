@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SYMBOL = "XAUUSDc"  # matches config/default.yaml's default symbol, so CLI runs that omit --symbol find the cache
 
 
-def _write_cache(data_dir: Path, n: int = 3000, seed: int = 7) -> None:
+def _write_cache(data_dir: Path, symbol: str = SYMBOL, n: int = 3000, seed: int = 7) -> None:
     data_dir.mkdir(parents=True, exist_ok=True)
     rng = np.random.default_rng(seed)
     close = 2000 + np.cumsum(rng.normal(0, 2.0, n))
@@ -31,9 +31,9 @@ def _write_cache(data_dir: Path, n: int = 3000, seed: int = 7) -> None:
         "tick_volume": rng.integers(10, 500, n),
         "spread": np.full(n, 260, dtype="int64"),
     })
-    pq, sj = cache_paths(data_dir, SYMBOL, "M5")
+    pq, sj = cache_paths(data_dir, symbol, "M5")
     df.to_parquet(pq, index=False)
-    sj.write_text(json.dumps(SymbolSpec(name=SYMBOL, point=0.001, digits=3, contract_size=1.0).to_dict()),
+    sj.write_text(json.dumps(SymbolSpec(name=symbol, point=0.001, digits=3, contract_size=1.0).to_dict()),
                   encoding="utf-8")
 
 
@@ -129,3 +129,33 @@ def test_optimize_cli_rejects_bad_axis(tmp_path):
                        cwd=ROOT, capture_output=True, text=True, timeout=300)
     assert r.returncode != 0
     assert "nope" in (r.stdout + r.stderr)
+
+
+def test_optimize_cli_honours_an_explicit_non_default_symbol(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_cache(data_dir, symbol="XOVERRIDE")
+    out = tmp_path / "results"
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "optimize.py"),
+                        "--strategy", "rsi2_ema_swing", "--tf", "M5", "--symbol", "XOVERRIDE",
+                        "--axis", "ema=20/100", "--axis", "atr_mult=1.5",
+                        "--axis", "rsi_fast=2", "--axis", "rsi2=90/10",
+                        "--tp", "4", "--risk", "1",
+                        "--data-dir", str(data_dir), "--out", str(out)],
+                       cwd=ROOT, capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0, r.stdout + r.stderr
+    produced = {p.name for p in next(out.glob("*")).iterdir()}
+    assert "report_XOVERRIDE.xlsx" in produced and "report_XOVERRIDE.html" in produced
+
+
+def test_optimize_cli_rejects_malformed_axis_value(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_cache(data_dir)
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "optimize.py"),
+                        "--strategy", "rsi2_ema_swing", "--tf", "M5", "--axis", "ema=abc",
+                        "--data-dir", str(data_dir), "--out", str(tmp_path / "r")],
+                       cwd=ROOT, capture_output=True, text=True, timeout=300)
+    assert r.returncode != 0
+    combined = r.stdout + r.stderr
+    assert "ema" in combined and "Traceback" not in combined
