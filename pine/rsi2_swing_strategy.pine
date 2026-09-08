@@ -1,0 +1,304 @@
+//@version=6
+// =============================================================================
+//  RSI2 Swing Pullback Strategy
+//
+//  Structure (always on):
+//    RSI(2) with levels 90/10 splits the chart into alternating segments.
+//    HIGH segment: starts when RSI2 crosses UP 90, ends when it crosses DOWN 10
+//                  -> swing high = highest(high) over the segment (both boundary bars included)
+//    LOW  segment: starts when RSI2 crosses DOWN 10, ends when it crosses UP 90
+//                  -> swing low  = lowest(low) over the segment
+//    A swing is only KNOWN when its segment ends -> that bar is the signal bar.
+//
+//  BUY : RSI(14) crosses UP 75 -> ARMED (flag on).
+//        First LOW segment that STARTS after the flag -> TRACKING.
+//        LOW segment ends (RSI2 crosses up 90) -> swing low confirmed -> BUY at next open.
+//        SL = swing low - AtrMult*ATR(14).  TP = TP_R x risk, from the real fill price.
+//        1 cross = max 1 trade. Another RSI14 cross up 75 while ARMED/TRACKING resets the setup.
+//  SELL: mirror (RSI14 crosses DOWN 25, first HIGH segment after the flag, SL above swing high).
+//
+//  Known divergences vs a hedging MT5 backtest (by design):
+//   1. Pine has no spread model. `slippage` (~spread/2 in ticks) approximates it.
+//      XAUUSD mintick 0.01, spread ~0.26 -> 13 ticks. Edit the constant for your broker.
+//   2. Pine cannot hedge (net position). `Block opposite while in trade` = true skips
+//      opposite signals instead of reversing.
+// =============================================================================
+strategy("RSI2 Swing Pullback", shorttitle="RSI2-SWING", overlay=true,
+     pyramiding=0, calc_on_every_tick=false, process_orders_on_close=false,
+     initial_capital=10000, currency=currency.USD,
+     commission_type=strategy.commission.cash_per_contract, commission_value=0.035,
+     slippage=13,
+     max_labels_count=500, max_lines_count=500)
+
+// ---------------------------------------------------------------- inputs ----
+grpEntry = "Entry / Risk"
+tpR        = input.float(2.0, "Take profit (R)", minval=0.1, step=0.5, group=grpEntry)
+riskPct    = input.float(1.0, "Risk % of equity per trade", minval=0.01, step=0.25, group=grpEntry)
+enableBuy  = input.bool(true, "Enable BUY", group=grpEntry)
+enableSell = input.bool(true, "Enable SELL", group=grpEntry)
+blockOpp   = input.bool(true, "Block opposite signal while in trade", group=grpEntry,
+     tooltip="true = skip opposite signal while a position is open. false = opposite signal reverses the position (Pine is net-position).")
+maxWait    = input.int(0, "Max bars from flag to entry (0 = never expires)", minval=0, group=grpEntry)
+
+grpTrig = "Trigger RSI (slow)"
+rsiSlowLen = input.int(14, "RSI length", minval=2, group=grpTrig)
+sHi        = input.float(75, "Overbought -> arm BUY", group=grpTrig)
+sLo        = input.float(25, "Oversold -> arm SELL", group=grpTrig)
+
+grpStruct = "Structure RSI (fast)"
+rsiFastLen = input.int(2, "RSI length", minval=1, group=grpStruct)
+fHi        = input.float(90, "Cross up -> HIGH segment starts / LOW segment ends", group=grpStruct)
+fLo        = input.float(10, "Cross down -> LOW segment starts / HIGH segment ends", group=grpStruct)
+
+grpSL = "Stop loss"
+atrLen  = input.int(14, "ATR length", minval=1, group=grpSL)
+atrMult = input.float(1.0, "ATR multiplier below/above swing", minval=0, step=0.25, group=grpSL)
+
+grpViz = "Display"
+showSwings = input.bool(true, "Swing markers + zigzag", group=grpViz)
+showState  = input.bool(true, "Shade ARMED / TRACKING state", group=grpViz)
+showLines  = input.bool(true, "Plot SL / TP of open trade", group=grpViz)
+
+// ------------------------------------------------------------ indicators ----
+rsiS = ta.rsi(close, rsiSlowLen)
+rsiF = ta.rsi(close, rsiFastLen)
+atr  = ta.atr(atrLen)
+bool ok = not na(rsiS) and not na(rsiS[1]) and not na(rsiF) and not na(rsiF[1]) and not na(atr)
+
+bool sUp = ok and rsiS[1] <= sHi and rsiS > sHi      // RSI14 cross up 75
+bool sDn = ok and rsiS[1] >= sLo and rsiS < sLo      // RSI14 cross down 25
+bool fUp = ok and rsiF[1] <= fHi and rsiF > fHi      // RSI2 cross up 90
+bool fDn = ok and rsiF[1] >= fLo and rsiF < fLo      // RSI2 cross down 10
+
+// ------------------------------------------------- RSI2 swing structure ----
+// seg: 0 undefined (before first cross), 1 HIGH segment, -1 LOW segment
+var int   seg        = 0
+var float segHigh    = na
+var int   segHighBar = na
+var float segLow     = na
+var int   segLowBar  = na
+var float lastSwingHigh    = na
+var int   lastSwingHighBar = na
+var float lastSwingLow     = na
+var int   lastSwingLowBar  = na
+
+bool  swingLowConf  = false      // a swing low got confirmed on this bar
+bool  swingHighConf = false
+float confSwingLow  = na
+float confSwingHigh = na
+
+// 1. extend the running extreme with this bar (boundary bar belongs to both segments)
+if seg == 1 and high > segHigh
+    segHigh := high
+    segHighBar := bar_index
+if seg == -1 and low < segLow
+    segLow := low
+    segLowBar := bar_index
+
+// 2. transitions
+if fUp
+    if seg == -1
+        swingLowConf := true
+        confSwingLow := segLow
+        if showSwings
+            label.new(segLowBar, segLow, "L", style=label.style_label_up, color=color.new(color.green, 20), textcolor=color.white, size=size.tiny)
+            if not na(lastSwingHighBar)
+                line.new(lastSwingHighBar, lastSwingHigh, segLowBar, segLow, color=color.new(color.gray, 30), width=1)
+        lastSwingLow := segLow
+        lastSwingLowBar := segLowBar
+    seg := 1
+    segHigh := high
+    segHighBar := bar_index
+if fDn
+    if seg == 1
+        swingHighConf := true
+        confSwingHigh := segHigh
+        if showSwings
+            label.new(segHighBar, segHigh, "H", style=label.style_label_down, color=color.new(color.red, 20), textcolor=color.white, size=size.tiny)
+            if not na(lastSwingLowBar)
+                line.new(lastSwingLowBar, lastSwingLow, segHighBar, segHigh, color=color.new(color.gray, 30), width=1)
+        lastSwingHigh := segHigh
+        lastSwingHighBar := segHighBar
+    seg := -1
+    segLow := low
+    segLowBar := bar_index
+
+// ----------------------------------------------------- BUY state machine ----
+// 0 IDLE, 1 ARMED (flag on, waiting for a LOW segment to start), 2 TRACKING (inside that LOW segment)
+var int   bState  = 0
+var int   bAnchor = na
+var float bRunLow = na
+
+bool  buyTrig = false
+float buySL   = na
+int   buyWait = na
+
+if ok
+    if bState == 0
+        if sUp
+            bState := 1
+            bAnchor := bar_index
+            bRunLow := na
+    else if sUp                                         // re-cross -> reset setup
+        bState := 1
+        bAnchor := bar_index
+        bRunLow := na
+    else if maxWait > 0 and bar_index - bAnchor > maxWait
+        bState := 0
+        bAnchor := na
+        bRunLow := na
+    else if bState == 1
+        if fDn                                          // LOW segment starts AFTER the flag
+            bState := 2
+            bRunLow := low
+    else                                                // TRACKING
+        bRunLow := math.min(bRunLow, low)
+        if fUp                                          // LOW segment ends -> swing low confirmed
+            buyTrig := true
+            buySL   := bRunLow - atrMult * atr
+            buyWait := bar_index - bAnchor
+            bState := 0
+            bAnchor := na
+            bRunLow := na
+
+// ---------------------------------------------------- SELL state machine ----
+var int   sState   = 0
+var int   sAnchor  = na
+var float sRunHigh = na
+
+bool  sellTrig = false
+float sellSL   = na
+int   sellWait = na
+
+if ok
+    if sState == 0
+        if sDn
+            sState := 1
+            sAnchor := bar_index
+            sRunHigh := na
+    else if sDn
+        sState := 1
+        sAnchor := bar_index
+        sRunHigh := na
+    else if maxWait > 0 and bar_index - sAnchor > maxWait
+        sState := 0
+        sAnchor := na
+        sRunHigh := na
+    else if sState == 1
+        if fUp                                          // HIGH segment starts AFTER the flag
+            sState := 2
+            sRunHigh := high
+    else
+        sRunHigh := math.max(sRunHigh, high)
+        if fDn                                          // HIGH segment ends -> swing high confirmed
+            sellTrig := true
+            sellSL   := sRunHigh + atrMult * atr
+            sellWait := bar_index - sAnchor
+            sState := 0
+            sAnchor := na
+            sRunHigh := na
+
+// ------------------------------------------------------------ execution ----
+// Position handling lives here, NOT in the state machines: a trigger always consumes the flag,
+// even when the trade is blocked.
+var float lSL = na
+var float lTP = na
+var bool  lArm = false
+var int   lSigBar = na
+var float sSL = na
+var float sTP = na
+var bool  sArm = false
+var int   sSigBar = na
+
+bool inLong  = strategy.position_size > 0
+bool inShort = strategy.position_size < 0
+
+if lArm and not na(lSigBar) and bar_index > lSigBar and not inLong
+    lArm := false
+if sArm and not na(sSigBar) and bar_index > sSigBar and not inShort
+    sArm := false
+
+// re-arm exit with the exact R once the real fill price is known
+if lArm and inLong
+    float fillPx = strategy.position_avg_price
+    lTP := fillPx + tpR * (fillPx - lSL)
+    strategy.exit("LX", from_entry="L", stop=lSL, limit=lTP)
+    lArm := false
+if sArm and inShort
+    float fillPx = strategy.position_avg_price
+    sTP := fillPx - tpR * (sSL - fillPx)
+    strategy.exit("SX", from_entry="S", stop=sSL, limit=sTP)
+    sArm := false
+
+string alertJson = na
+
+if buyTrig and enableBuy
+    bool blocked = inLong or (blockOpp and inShort)
+    float slDist = close - buySL
+    if not blocked and slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("L", strategy.long, qty=qty, comment="BUY swing")
+        strategy.exit("LX", from_entry="L", stop=buySL, limit=close + tpR * slDist)   // provisional TP; SL active from fill
+        lSL := buySL
+        lTP := close + tpR * slDist
+        lArm := true
+        lSigBar := bar_index
+        alertJson := str.format('{"symbol":"{0}","tf":"{1}","direction":"BUY","sl":{2,number,#.#####},"tp_r":{3},"ref_price":{4,number,#.#####},"bars_since_flag":{5}}',
+             syminfo.ticker, timeframe.period, buySL, tpR, close, buyWait)
+    else if blocked
+        label.new(bar_index, low, "BUY blocked", style=label.style_label_up, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+if sellTrig and enableSell
+    bool blocked = inShort or (blockOpp and inLong)
+    float slDist = sellSL - close
+    if not blocked and slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("S", strategy.short, qty=qty, comment="SELL swing")
+        strategy.exit("SX", from_entry="S", stop=sellSL, limit=close - tpR * slDist)
+        sSL := sellSL
+        sTP := close - tpR * slDist
+        sArm := true
+        sSigBar := bar_index
+        alertJson := str.format('{"symbol":"{0}","tf":"{1}","direction":"SELL","sl":{2,number,#.#####},"tp_r":{3},"ref_price":{4,number,#.#####},"bars_since_flag":{5}}',
+             syminfo.ticker, timeframe.period, sellSL, tpR, close, sellWait)
+    else if blocked
+        label.new(bar_index, high, "SELL blocked", style=label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+if not na(alertJson)
+    alert(alertJson, alert.freq_once_per_bar_close)
+
+// --------------------------------------------------------------- visuals ----
+// state shading: ARMED faint, TRACKING stronger
+color bgBuy  = bState == 1 ? color.new(color.green, 94) : bState == 2 ? color.new(color.green, 85) : na
+color bgSell = sState == 1 ? color.new(color.red, 94)   : sState == 2 ? color.new(color.red, 85)   : na
+bgcolor(showState ? bgBuy : na, title="BUY state")
+bgcolor(showState ? bgSell : na, title="SELL state")
+
+// entry markers
+plotshape(buyTrig and enableBuy,   title="BUY signal",  style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.small, text="B")
+plotshape(sellTrig and enableSell, title="SELL signal", style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.small, text="S")
+
+// SL / TP of the open trade
+float plotSL = inLong ? lSL : inShort ? sSL : na
+float plotTP = inLong ? lTP : inShort ? sTP : na
+plot(showLines ? plotSL : na, "SL", color=color.new(color.red, 0),   style=plot.style_linebr, linewidth=1)
+plot(showLines ? plotTP : na, "TP", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+
+// status table
+var table tbl = table.new(position.top_right, 2, 5, border_width=1)
+if barstate.islast
+    string segTxt = seg == 1 ? "HIGH seg" : seg == -1 ? "LOW seg" : "-"
+    string bTxt = bState == 0 ? "idle" : bState == 1 ? "ARMED" : "TRACKING low"
+    string sTxt = sState == 0 ? "idle" : sState == 1 ? "ARMED" : "TRACKING high"
+    table.cell(tbl, 0, 0, "RSI" + str.tostring(rsiSlowLen), text_size=size.small)
+    table.cell(tbl, 1, 0, str.tostring(rsiS, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 1, "RSI" + str.tostring(rsiFastLen), text_size=size.small)
+    table.cell(tbl, 1, 1, str.tostring(rsiF, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 2, "Segment", text_size=size.small)
+    table.cell(tbl, 1, 2, segTxt, text_size=size.small)
+    table.cell(tbl, 0, 3, "BUY", text_size=size.small, text_color=color.green)
+    table.cell(tbl, 1, 3, bTxt, text_size=size.small)
+    table.cell(tbl, 0, 4, "SELL", text_size=size.small, text_color=color.red)
+    table.cell(tbl, 1, 4, sTxt, text_size=size.small)
