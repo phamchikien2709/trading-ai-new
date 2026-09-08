@@ -49,13 +49,43 @@ def _cagr(equity: pd.Series, initial_equity: float) -> float:
     return float((equity.iloc[-1] / initial_equity) ** (1 / years) - 1)
 
 
-def compute_metrics(trades: pd.DataFrame, equity: pd.Series, initial_equity: float, n_blocked: int = 0) -> dict:
+def max_consecutive_losses(pnl: pd.Series) -> int:
+    best = cur = 0
+    for v in pnl.astype(float):
+        cur = cur + 1 if v < 0 else 0
+        best = max(best, cur)
+    return int(best)
+
+
+def _sortino_daily(equity: pd.Series) -> float:
+    r = _daily_returns(equity)
+    downside = r[r < 0]
+    if len(r) < 2 or len(downside) == 0 or downside.std() == 0:
+        return 0.0
+    return float(r.mean() / downside.std() * np.sqrt(252))
+
+
+def monthly_table(equity: pd.Series) -> pd.DataFrame:
+    if equity.empty:
+        return pd.DataFrame()
+    monthly = equity.resample("1ME").last().dropna()
+    prev = monthly.shift(1)
+    prev.iloc[0] = equity.iloc[0]
+    ret = (monthly / prev - 1.0) * 100.0
+    df = pd.DataFrame({"year": ret.index.year, "month": ret.index.month, "ret": ret.values})
+    return df.pivot(index="year", columns="month", values="ret").reindex(columns=range(1, 13))
+
+
+def compute_metrics(trades: pd.DataFrame, equity: pd.Series, initial_equity: float,
+                     n_blocked: int = 0, n_bars: int | None = None) -> dict:
     n = int(len(trades))
     if n == 0:
         return {"n_trades": 0, "n_wins": 0, "win_rate": 0.0, "avg_r": 0.0, "expectancy_r": 0.0,
                 "profit_factor": 0.0, "max_dd_usd": 0.0, "max_dd_pct": 0.0, "sharpe_daily": 0.0, "cagr": 0.0,
                 "avg_bars_held": 0.0, "net_pnl": 0.0, "final_equity": float(initial_equity),
-                "n_blocked": int(n_blocked), "n_buy": 0, "n_sell": 0, "avg_r_buy": 0.0, "avg_r_sell": 0.0}
+                "n_blocked": int(n_blocked), "n_buy": 0, "n_sell": 0, "avg_r_buy": 0.0, "avg_r_sell": 0.0,
+                "avg_win_r": 0.0, "avg_loss_r": 0.0, "expectancy_usd": 0.0, "sortino_daily": 0.0,
+                "calmar": 0.0, "max_consec_losses": 0, "time_in_market_pct": 0.0}
     pnl = trades["pnl_usd"].astype(float)
     r = trades["r_multiple"].astype(float)
     wins = pnl[pnl > 0]
@@ -65,6 +95,9 @@ def compute_metrics(trades: pd.DataFrame, equity: pd.Series, initial_equity: flo
     dd_usd, dd_pct = max_drawdown(equity)
     buy = trades[trades["direction"] == "BUY"]
     sell = trades[trades["direction"] == "SELL"]
+    cagr = _cagr(equity, initial_equity)
+    bars_held = trades["bars_held"].astype(float)
+    tim = min(1.0, float(bars_held.sum()) / n_bars) * 100.0 if n_bars else 0.0
     return {
         "n_trades": n,
         "n_wins": int((pnl > 0).sum()),
@@ -75,8 +108,8 @@ def compute_metrics(trades: pd.DataFrame, equity: pd.Series, initial_equity: flo
         "max_dd_usd": dd_usd,
         "max_dd_pct": dd_pct,
         "sharpe_daily": _sharpe_daily(equity),
-        "cagr": _cagr(equity, initial_equity),
-        "avg_bars_held": float(trades["bars_held"].astype(float).mean()),
+        "cagr": cagr,
+        "avg_bars_held": float(bars_held.mean()),
         "net_pnl": float(pnl.sum()),
         "final_equity": float(initial_equity + pnl.sum()),
         "n_blocked": int(n_blocked),
@@ -84,4 +117,11 @@ def compute_metrics(trades: pd.DataFrame, equity: pd.Series, initial_equity: flo
         "n_sell": int(len(sell)),
         "avg_r_buy": float(buy["r_multiple"].astype(float).mean()) if len(buy) else 0.0,
         "avg_r_sell": float(sell["r_multiple"].astype(float).mean()) if len(sell) else 0.0,
+        "avg_win_r": float(r[pnl > 0].mean()) if len(wins) else 0.0,
+        "avg_loss_r": float(r[pnl < 0].mean()) if len(losses) else 0.0,
+        "expectancy_usd": float(pnl.mean()),
+        "sortino_daily": _sortino_daily(equity),
+        "calmar": float(cagr / dd_pct) if dd_pct > 0 else 0.0,
+        "max_consec_losses": max_consecutive_losses(pnl),
+        "time_in_market_pct": tim,
     }
