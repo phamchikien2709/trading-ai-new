@@ -334,9 +334,13 @@ def write_html(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[s
                          f"No combo passed: {e(FILTER_TEXT)}.</div>")
         else:
             p, row = r["params"], r["row"]
-            parts.append(f"<div class='rec'><b>{e(tf)}</b>: TP <b>{p['tp_r']:g}R</b>, ATR mult <b>{p['atr_mult']:g}</b>, "
-                         f"RSI14 <b>{p['ob']:g}/{p['os']:g}</b>, RSI fast <b>{p['rsi_fast']:g}</b> "
-                         f"<b>{p['f_hi']:g}/{p['f_lo']:g}</b>"
+            # Render from the adapter's own columns rather than naming strategy-specific keys
+            # (e.g. rsi2_swing's ob/os don't exist on rsi2_ema_swing) — adapter.title() covers
+            # the panel columns (same helper the heatmap/IS-vs-OOS labels use); tp_r and the
+            # robust axis are named explicitly since title() doesn't cover them.
+            robust_col = adapter.axis(adapter.robust_axis).columns[0]
+            parts.append(f"<div class='rec'><b>{e(tf)}</b>: TP <b>{p['tp_r']:g}R</b>, "
+                         f"{e(robust_col)} <b>{p[robust_col]:g}</b>, {e(adapter.title(p))}"
                          f"<br>net P&amp;L <b>${row['net_pnl']:,.0f}</b> · profit factor <b>{row['profit_factor']:.2f}</b> · "
                          f"max drawdown <b>{row['max_dd_pct']:.1%}</b> · capped lots "
                          f"<b>{row.get('capped_share', 0.0):.0%}</b>"
