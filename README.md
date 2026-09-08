@@ -124,6 +124,24 @@ keeps that strategy's defaults. Output goes to `results/<strategy>/<timestamp>/`
 Default grid for `rsi2_ema_swing`: RSI fast (2, 3, 5) × levels (90/10, 95/5) ×
 EMA (20/100, 20/200, 50/200, 10/50) × ATR mult (1, 1.5, 2, 3) × TP (2, 4, 6, 8) = 384 combos per timeframe.
 
+### Re-rendering a finished run — `scripts/rerender.py`
+
+A grid run costs 12–25 minutes, so an export bug must not force a re-run. `rerender.py` rebuilds
+the reports **in place** from a run's own `grid.csv`, in seconds:
+
+    python scripts/rerender.py results/rsi2_ema_swing/20260908_220458
+    python scripts/rerender.py results/rsi2_ema_swing/20260908_220458 --offline
+
+It redoes `recommend()`, re-runs only the recommended combo per timeframe (one backtest each,
+not the grid), overwrites `report_<symbol>.xlsx` / `.html` in the same folder, and reprints the
+`=== Recommendation ===` block and per-timeframe top-5 tables — so a crashed run's console
+output is recoverable too. `grid.csv` is read, never rewritten.
+
+The strategy comes from `--strategy` or the run folder's parent directory name. `--min-sl-mult`
+and `--htf` default to the `min_sl_mult` / `htf_seconds` recorded on `grid.csv`'s first row (a
+run records the same value on every row); `--risk`, `--concurrency` and `--data-dir` take
+`optimize.py`'s defaults, so pass them if the original run overrode them.
+
 Adding a strategy: write the module, then one `StrategyAdapter` entry in
 `rsi_fvg/strategies/registry.py` declaring its axes and the grid columns they expand to. The
 optimizer, the reports and both CLIs read the column names from there.
