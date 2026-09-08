@@ -38,14 +38,14 @@ def _fixture():
             "initial_equity": 10_000, "risk_pct": 5.0, "concurrency": "hedge", "spread_points": 20,
             "commission_per_lot_rt": 0.0, "slippage_points": 0, "is_frac": 0.7,
             "grid": {"tp_r": [1, 2], "atr_mult": [0.5, 1], "rsi14": ["75/25"], "rsi2": ["90/10"],
-                     "rsi_fast": [2]},
+                     "rsi_fast": [2]}, "strategy": "rsi2_swing",
             "git_hash": "test", "generated_at": "2026-09-08 00:00"}
     return df, rec, {"M5": res}, info
 
 
 def test_write_csvs(tmp_path):
     df, rec, res, info = _fixture()
-    write_csvs(tmp_path, df, res)
+    write_csvs(tmp_path, df, res, info)
     assert (tmp_path / "grid.csv").exists() and (tmp_path / "trades_M5.csv").exists()
     assert len(pd.read_csv(tmp_path / "grid.csv")) == 4
     grid = pd.read_csv(tmp_path / "grid.csv")
@@ -54,15 +54,15 @@ def test_write_csvs(tmp_path):
 
 
 def test_write_csvs_emits_skipped_only_when_non_empty(tmp_path):
-    df, _, res, _ = _fixture()
+    df, _, res, info = _fixture()
     r = res["M5"]
     assert r.skipped.empty
-    write_csvs(tmp_path, df, res)
+    write_csvs(tmp_path, df, res, info)
     assert not (tmp_path / "skipped_M5.csv").exists()          # nothing to say, no file
     r.skipped = pd.DataFrame([{"time": pd.Timestamp("2024-01-01", tz="UTC"),
                                "signal_time": pd.Timestamp("2024-01-01", tz="UTC"),
                                "direction": "BUY", "variant": "SWING", "reason": "blocked"}])
-    write_csvs(tmp_path, df, res)
+    write_csvs(tmp_path, df, res, info)
     assert (tmp_path / "skipped_M5.csv").exists()
     assert len(pd.read_csv(tmp_path / "skipped_M5.csv")) == 1
 
@@ -161,3 +161,27 @@ def test_write_html_handles_incomplete_grid(tmp_path):
     xlsx_p = tmp_path / "r.xlsx"
     write_xlsx(xlsx_p, incomplete_df, rec, res, info)
     assert xlsx_p.exists()
+
+
+def test_grid_first_cols_follow_the_adapter():
+    from rsi_fvg.backtest.export import grid_first_cols
+    cols = grid_first_cols(ADAPTER)
+    assert cols[:8] == ["tf", "rsi_fast", "ob", "os", "f_hi", "f_lo", "atr_mult", "tp_r"]
+    assert "flags" in cols and "robust_r" in cols
+
+
+def test_heatmap_has_one_panel_per_panel_col_combo():
+    from rsi_fvg.backtest.export import _fig_heatmaps
+    df, rec, res, info = _fixture()
+    g = df[df["tf"] == "M5"]
+    n_panels = g.groupby(ADAPTER.panel_cols).ngroups
+    fig = _fig_heatmaps("M5", g, ADAPTER)
+    assert len(fig.data) == n_panels
+    assert "RSI(" in fig.layout.annotations[0].text          # adapter title used as the subplot title
+
+
+def test_unknown_strategy_in_run_info_is_an_error(tmp_path):
+    from rsi_fvg.backtest.export import write_xlsx
+    df, rec, res, info = _fixture()
+    with pytest.raises(KeyError):
+        write_xlsx(tmp_path / "r.xlsx", df, rec, res, info | {"strategy": "nope"})

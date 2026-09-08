@@ -12,15 +12,27 @@ from openpyxl.styles import Font
 from openpyxl.utils import get_column_letter
 from plotly.subplots import make_subplots
 
+from ..strategies.registry import StrategyAdapter, get_adapter
 from .engine import BacktestResult
 from .metrics import monthly_table
-from .optimize import FILTER_TEXT, KEY_COLS
+from .optimize import FILTER_TEXT
 
-GRID_FIRST_COLS = KEY_COLS + ["n_signals", "n_rejected_min_sl",
-                              "n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct",
-                              "net_pnl", "final_equity", "ruined", "oversized_share", "capped_share",
-                              "is_n_trades", "is_avg_r", "is_max_dd_pct", "oos_n_trades", "oos_avg_r",
-                              "oos_max_dd_pct", "robust_r", "robust_ratio", "grid_edge", "flags"]
+GRID_METRIC_COLS = ["n_signals", "n_rejected_min_sl",
+                    "n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct",
+                    "net_pnl", "final_equity", "ruined", "oversized_share", "capped_share",
+                    "is_n_trades", "is_avg_r", "is_max_dd_pct", "oos_n_trades", "oos_avg_r",
+                    "oos_max_dd_pct", "robust_r", "robust_ratio", "grid_edge", "flags"]
+
+
+def grid_first_cols(adapter: StrategyAdapter) -> list[str]:
+    return adapter.full_key_cols() + GRID_METRIC_COLS
+
+
+def adapter_from_run_info(run_info: dict) -> StrategyAdapter:
+    return get_adapter(run_info.get("strategy", "rsi2_swing"))
+
+
+GRID_FIRST_COLS = grid_first_cols(get_adapter("rsi2_swing"))
 REC_COLS = ["n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct", "net_pnl", "ruined",
             "oversized_share", "capped_share", "is_n_trades", "is_avg_r", "oos_n_trades", "oos_avg_r",
             "robust_r", "robust_ratio", "grid_edge"]
@@ -55,8 +67,8 @@ def _apply_theme(fig: go.Figure) -> go.Figure:
     return fig
 
 
-def _order_grid(df: pd.DataFrame) -> pd.DataFrame:
-    first = [c for c in GRID_FIRST_COLS if c in df.columns]
+def _order_grid(df: pd.DataFrame, adapter: StrategyAdapter) -> pd.DataFrame:
+    first = [c for c in grid_first_cols(adapter) if c in df.columns]
     rest = [c for c in df.columns if c not in first]
     return df[first + rest]
 
@@ -101,7 +113,7 @@ def _rec_table(rec: dict) -> pd.DataFrame:
             rows.append({"tf": tf, "status": f"no reliable parameter set (filters: {FILTER_TEXT})"})
         else:
             row = {"tf": tf, "status": "recommended"}
-            row.update({k: r["params"][k] for k in KEY_COLS if k != "tf"})
+            row.update({k: v for k, v in r["params"].items() if k != "tf"})
             row.update({k: r["row"].get(k) for k in REC_COLS})
             row["reason"] = r["reason"]
             rows.append(row)
@@ -124,10 +136,12 @@ def _info_table(run_info: dict) -> pd.DataFrame:
     return pd.DataFrame(flat, columns=["key", "value"])
 
 
-def write_csvs(out_dir: Path, grid_df: pd.DataFrame, rec_results: dict[str, BacktestResult]) -> None:
+def write_csvs(out_dir: Path, grid_df: pd.DataFrame, rec_results: dict[str, BacktestResult],
+               run_info: dict) -> None:
+    adapter = adapter_from_run_info(run_info)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    _order_grid(grid_df).to_csv(out_dir / "grid.csv", index=False)
+    _order_grid(grid_df, adapter).to_csv(out_dir / "grid.csv", index=False)
     for tf, res in rec_results.items():
         res.trades.to_csv(out_dir / f"trades_{tf}.csv", index=False)
         if len(res.skipped):
@@ -150,9 +164,10 @@ def _bold_header(ws, row: int = 1) -> None:
 
 def write_xlsx(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[str, BacktestResult],
                run_info: dict) -> None:
+    adapter = adapter_from_run_info(run_info)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    grid = _order_grid(grid_df.copy())
+    grid = _order_grid(grid_df.copy(), adapter)
     for col in ("split_time", "ruin_time"):
         if col in grid.columns:
             grid[col] = pd.to_datetime(grid[col], utc=True).dt.tz_localize(None)
@@ -237,37 +252,38 @@ def _fig_r_hist(tf: str, res: BacktestResult) -> go.Figure:
     return _apply_theme(fig)
 
 
-def _fig_heatmaps(tf: str, g: pd.DataFrame) -> go.Figure:
-    combos = sorted(set(zip(g["rsi_fast"], g["ob"], g["os"], g["f_hi"], g["f_lo"])))
-    n = len(combos)
-    cols = min(3, n)
-    rows = int(np.ceil(n / cols))
-    titles = [f"RSI({int(k)}) {int(fh)}/{int(fl)} · RSI14 {int(ob)}/{int(os_)}"
-              for k, ob, os_, fh, fl in combos]
-    fig = make_subplots(rows=rows, cols=cols, subplot_titles=titles, horizontal_spacing=0.06, vertical_spacing=0.12)
+def _fig_heatmaps(tf: str, g: pd.DataFrame, adapter: StrategyAdapter) -> go.Figure:
+    y_col = adapter.axis(adapter.robust_axis).columns[0]
+    panel_cols = adapter.panel_cols
+    groups = list(g.groupby(panel_cols, sort=True))
+    n = len(groups)
+    cols = min(3, max(n, 1))
+    rows = int(np.ceil(n / cols)) if n else 1
+    titles = [adapter.title(dict(zip(panel_cols, key if isinstance(key, tuple) else (key,))))
+              for key, _ in groups]
+    fig = make_subplots(rows=rows, cols=cols, subplot_titles=titles,
+                        horizontal_spacing=0.06, vertical_spacing=0.12)
     zmax = float(np.nanmax(np.abs(g["oos_avg_r"].to_numpy()))) if len(g) else 1.0
     zmax = max(zmax, 1e-9)
-    for i, (k, ob, os_, fh, fl) in enumerate(combos):
-        gg = g[(g["rsi_fast"] == k) & (g["ob"] == ob) & (g["os"] == os_)
-               & (g["f_hi"] == fh) & (g["f_lo"] == fl)]
-        piv = gg.pivot(index="atr_mult", columns="tp_r", values="oos_avg_r").sort_index()
-        ntr = gg.pivot(index="atr_mult", columns="tp_r", values="n_trades").reindex_like(piv)
+    for i, (_, gg) in enumerate(groups):
+        piv = gg.pivot(index=y_col, columns="tp_r", values="oos_avg_r").sort_index()
+        ntr = gg.pivot(index=y_col, columns="tp_r", values="n_trades").reindex_like(piv)
         text = [[("" if (pd.isna(v) or pd.isna(k)) else f"{v:+.2f}<br>n={int(k)}")
                  for v, k in zip(rv, rk)] for rv, rk in zip(piv.values, ntr.values)]
         fig.add_trace(go.Heatmap(z=piv.values, x=[f"TP {c:g}R" for c in piv.columns],
-                                 y=[f"ATR×{r:g}" for r in piv.index], colorscale=_DIVERGING, zmid=0,
+                                 y=[f"{y_col}×{r:g}" for r in piv.index], colorscale=_DIVERGING, zmid=0,
                                  zmin=-zmax, zmax=zmax, text=text, texttemplate="%{text}",
                                  showscale=(i == 0), colorbar=dict(title="OOS avg R")),
                       row=i // cols + 1, col=i % cols + 1)
-    fig.update_layout(title=f"{tf} — OOS avg R heatmap (TP × ATR mult) per RSI level set",
+    fig.update_layout(title=f"{tf} — OOS avg R heatmap (TP × {y_col}) per parameter set",
                       height=300 * rows + 80, margin=dict(l=40, r=20, t=70, b=30))
     return _apply_theme(fig)
 
 
-def _fig_is_oos(tf: str, g: pd.DataFrame) -> go.Figure:
-    labels = [f"TP {r.tp_r:g}R · ATR×{r.atr_mult:g} · RSI14 {int(r.ob)}/{int(r.os)} · "
-              f"RSI({int(r.rsi_fast)}) {int(r.f_hi)}/{int(r.f_lo)}"
-              f"<br>n={int(r.n_trades)} · flags: {r.flags or '-'}" for r in g.itertuples()]
+def _fig_is_oos(tf: str, g: pd.DataFrame, adapter: StrategyAdapter) -> go.Figure:
+    labels = [f"TP {row['tp_r']:g}R · {adapter.title(row)}"
+              f"<br>n={int(row['n_trades'])} · flags: {row['flags'] or '-'}"
+              for row in g.to_dict("records")]
     fig = go.Figure(go.Scatter(x=g["is_avg_r"], y=g["oos_avg_r"], mode="markers", text=labels,
                                hovertemplate="%{text}<br>IS %{x:+.2f}R · OOS %{y:+.2f}R<extra></extra>",
                                marker=dict(size=8, color=g["n_trades"], colorscale=_SEQ_BLUE, showscale=True,
@@ -296,6 +312,7 @@ def write_html(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[s
                run_info: dict, offline: bool = False) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    adapter = adapter_from_run_info(run_info)
     include = True if offline else "cdn"
     state = {"first": True}
 
@@ -331,12 +348,12 @@ def write_html(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[s
 
     for tf, g in grid_df.groupby("tf", sort=False):
         parts.append(f"<h2>{e(tf)} — parameter grid</h2>")
-        parts.append(fig_html(_fig_heatmaps(tf, g)))
-        parts.append(fig_html(_fig_is_oos(tf, g)))
+        parts.append(fig_html(_fig_heatmaps(tf, g, adapter)))
+        parts.append(fig_html(_fig_is_oos(tf, g, adapter)))
         # Ranked on what recommend() actually scores (IS + robustness); OOS is only a gate.
         top = g.sort_values(["is_avg_r", "robust_r"], ascending=False).head(10)
         parts.append("<h3>Top 10 by IS avg R (then robustness) — the ranking the recommendation uses</h3>")
-        parts.append(_fmt_table(top, [c for c in GRID_FIRST_COLS if c in top.columns]))
+        parts.append(_fmt_table(top, [c for c in grid_first_cols(adapter) if c in top.columns]))
 
     parts.append("<h2>Warnings</h2>")
     flagged = grid_df[grid_df["flags"].astype(str) != ""]

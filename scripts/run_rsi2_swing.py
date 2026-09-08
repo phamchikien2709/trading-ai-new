@@ -139,7 +139,7 @@ def main() -> int:
                 "git_hash": _git_hash(), "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M")}
 
     out_dir = Path(a.out) / datetime.now().strftime("%Y%m%d_%H%M%S")
-    write_csvs(out_dir, grid_df, rec_results)
+    write_csvs(out_dir, grid_df, rec_results, run_info)
     write_xlsx(out_dir / f"report_{symbol}.xlsx", grid_df, rec, rec_results, run_info)
     write_html(out_dir / f"report_{symbol}.html", grid_df, rec, rec_results, run_info, offline=a.offline)
 
