@@ -1,0 +1,256 @@
+//@version=6
+// =============================================================================
+//  RSI2 Swing + EMA Trend Strategy
+//
+//  Structure (same as RSI2 Swing Pullback):
+//    RSI(rsiFastLen) with levels fHi/fLo splits the chart into alternating segments.
+//    HIGH segment: cross UP fHi -> ... -> cross DOWN fLo  => swing high = highest(high)
+//    LOW  segment: cross DOWN fLo -> ... -> cross UP fHi  => swing low  = lowest(low)
+//    A swing is only KNOWN when its segment ends; that bar is the signal bar.
+//
+//  Entry (no RSI14 arm-and-wait here):
+//    BUY  when a swing LOW is confirmed AND emaFast > emaSlow.
+//    SELL when a swing HIGH is confirmed AND emaFast < emaSlow.
+//    SL = swing -/+ AtrMult*ATR(14).  TP = TP_R x risk, from the real fill price.
+//    Optional H1 RSI(rsiSlowLen) trend gate on top (same idiom as the sibling script).
+//
+//  Python twin: rsi_fvg/strategies/rsi2_ema_swing.py. Spec:
+//    docs/superpowers/specs/2026-09-08-rsi2-ema-swing-strategy-design.md
+//  Known divergence: Python leaves the first ema_slow-1 bars NaN (no signals there); Pine's
+//  ta.ema emits values from bar 0. Everything after the warm-up matches.
+//
+//  Known divergences vs a hedging MT5 backtest (by design):
+//   1. Pine has no spread model. `slippage` (~spread/2 in ticks) approximates it.
+//   2. Pine cannot hedge (net position). `Block opposite while in trade` = true skips
+//      opposite signals instead of reversing.
+// =============================================================================
+strategy("RSI2 EMA Swing", shorttitle="RSI2-EMA", overlay=true,
+     pyramiding=0, calc_on_every_tick=false, process_orders_on_close=false,
+     initial_capital=10000, currency=currency.USD,
+     commission_type=strategy.commission.cash_per_contract, commission_value=0.035,
+     slippage=13,
+     max_labels_count=500, max_lines_count=500)
+
+// ---------------------------------------------------------------- inputs ----
+grpEntry = "Entry / Risk"
+tpR        = input.float(8.0, "Take profit (R)", minval=0.1, step=0.5, group=grpEntry)
+riskPct    = input.float(1.0, "Risk % of equity per trade", minval=0.01, step=0.25, group=grpEntry)
+enableBuy  = input.bool(true, "Enable BUY", group=grpEntry)
+enableSell = input.bool(true, "Enable SELL", group=grpEntry)
+blockOpp   = input.bool(true, "Block opposite signal while in trade", group=grpEntry,
+     tooltip="true = skip opposite signal while a position is open. false = opposite signal reverses the position (Pine is net-position).")
+
+grpTrig = "Trend filter"
+rsiSlowLen = input.int(14, "RSI length", minval=2, group=grpTrig)
+useHtf     = input.bool(true, "H1 RSI14 trend filter", group=grpTrig,
+     tooltip="Take BUY only while the last COMPLETED higher-timeframe RSI is above 50, SELL only below. A blocked trigger still consumes the flag.")
+htfTf      = input.timeframe("60", "Trend timeframe", group=grpTrig)
+
+grpStruct = "Structure RSI (fast)"
+rsiFastLen = input.int(2, "RSI length", minval=1, group=grpStruct)
+fHi        = input.float(90, "Cross up -> HIGH segment starts / LOW segment ends", group=grpStruct)
+fLo        = input.float(10, "Cross down -> LOW segment starts / HIGH segment ends", group=grpStruct)
+
+grpEma = "EMA trend"
+emaFastLen = input.int(20, "EMA fast", minval=1, group=grpEma)
+emaSlowLen = input.int(100, "EMA slow", minval=1, group=grpEma)
+
+grpSL = "Stop loss"
+atrLen  = input.int(14, "ATR length", minval=1, group=grpSL)
+atrMult = input.float(1.5, "ATR multiplier below/above swing", minval=0, step=0.25, group=grpSL)
+minSlTicks = input.int(0, "Min SL distance (ticks, 0 = off)", minval=0, group=grpSL,
+     tooltip="Skip the trade when the stop sits closer than this to the entry. The RSI2 structure can put it inside the spread, where a nominal 5% risk is a coin flip on the next tick.")
+
+grpViz = "Display"
+showSwings = input.bool(true, "Swing markers + zigzag", group=grpViz)
+showState  = input.bool(true, "Shade ARMED / TRACKING state", group=grpViz)
+showLines  = input.bool(true, "Plot SL / TP of open trade", group=grpViz)
+
+// ------------------------------------------------------------ indicators ----
+rsiS = ta.rsi(close, rsiSlowLen)
+rsiF = ta.rsi(close, rsiFastLen)
+atr  = ta.atr(atrLen)
+emaFast = ta.ema(close, emaFastLen)
+emaSlow = ta.ema(close, emaSlowLen)
+bool trendUp = emaFast > emaSlow
+bool trendDn = emaFast < emaSlow
+// Trend RSI of the last COMPLETED higher-timeframe bar. The `[1]` + `lookahead_on` pair is the
+// non-repainting idiom: lookahead fetches the HTF bar's slot as soon as it opens, and the [1]
+// shift makes that the previous, already-closed bar. Python side: htf_rsi() + htf_level (50).
+float htfRsi = request.security(syminfo.tickerid, htfTf, ta.rsi(close, rsiSlowLen)[1], barmerge.gaps_off, barmerge.lookahead_on)
+bool ok = not na(rsiS) and not na(rsiS[1]) and not na(rsiF) and not na(rsiF[1]) and not na(atr)
+
+bool fUp = ok and rsiF[1] <= fHi and rsiF > fHi      // RSI2 cross up 90
+bool fDn = ok and rsiF[1] >= fLo and rsiF < fLo      // RSI2 cross down 10
+
+// ------------------------------------------------- RSI2 swing structure ----
+// seg: 0 undefined (before first cross), 1 HIGH segment, -1 LOW segment
+var int   seg        = 0
+var float segHigh    = na
+var int   segHighBar = na
+var float segLow     = na
+var int   segLowBar  = na
+var float lastSwingHigh    = na
+var int   lastSwingHighBar = na
+var float lastSwingLow     = na
+var int   lastSwingLowBar  = na
+
+bool  swingLowConf  = false      // a swing low got confirmed on this bar
+bool  swingHighConf = false
+float confSwingLow  = na
+float confSwingHigh = na
+
+// 1. extend the running extreme with this bar (boundary bar belongs to both segments)
+if seg == 1 and high > segHigh
+    segHigh := high
+    segHighBar := bar_index
+if seg == -1 and low < segLow
+    segLow := low
+    segLowBar := bar_index
+
+// 2. transitions
+if fUp
+    if seg == -1
+        swingLowConf := true
+        confSwingLow := segLow
+        if showSwings
+            label.new(segLowBar, segLow, "L", style=label.style_label_up, color=color.new(color.green, 20), textcolor=color.white, size=size.tiny)
+            if not na(lastSwingHighBar)
+                line.new(lastSwingHighBar, lastSwingHigh, segLowBar, segLow, color=color.new(color.gray, 30), width=1)
+        lastSwingLow := segLow
+        lastSwingLowBar := segLowBar
+    seg := 1
+    segHigh := high
+    segHighBar := bar_index
+if fDn
+    if seg == 1
+        swingHighConf := true
+        confSwingHigh := segHigh
+        if showSwings
+            label.new(segHighBar, segHigh, "H", style=label.style_label_down, color=color.new(color.red, 20), textcolor=color.white, size=size.tiny)
+            if not na(lastSwingLowBar)
+                line.new(lastSwingLowBar, lastSwingLow, segHighBar, segHigh, color=color.new(color.gray, 30), width=1)
+        lastSwingHigh := segHigh
+        lastSwingHighBar := segHighBar
+    seg := -1
+    segLow := low
+    segLowBar := bar_index
+
+// ------------------------------------------------------------- triggers ----
+// Every confirmed swing whose side agrees with the EMA trend is a signal. There is no
+// arm-and-wait flag to consume, so a failed gate simply produces nothing.
+bool buyTrig  = false
+float buySL   = na
+bool sellTrig = false
+float sellSL  = na
+
+if ok and swingLowConf and trendUp and (not useHtf or htfRsi > 50)
+    buyTrig := true
+    buySL   := confSwingLow - atrMult * atr
+
+if ok and swingHighConf and trendDn and (not useHtf or htfRsi < 50)
+    sellTrig := true
+    sellSL   := confSwingHigh + atrMult * atr
+
+// ------------------------------------------------------------ execution ----
+// Position handling lives here, NOT in the state machines: a trigger always consumes the flag,
+// even when the trade is blocked.
+var float lSL = na
+var float lTP = na
+var bool  lArm = false
+var int   lSigBar = na
+var float sSL = na
+var float sTP = na
+var bool  sArm = false
+var int   sSigBar = na
+
+bool inLong  = strategy.position_size > 0
+bool inShort = strategy.position_size < 0
+
+if lArm and not na(lSigBar) and bar_index > lSigBar and not inLong
+    lArm := false
+if sArm and not na(sSigBar) and bar_index > sSigBar and not inShort
+    sArm := false
+
+// re-arm exit with the exact R once the real fill price is known
+if lArm and inLong
+    float fillPx = strategy.position_avg_price
+    lTP := fillPx + tpR * (fillPx - lSL)
+    strategy.exit("LX", from_entry="L", stop=lSL, limit=lTP)
+    lArm := false
+if sArm and inShort
+    float fillPx = strategy.position_avg_price
+    sTP := fillPx - tpR * (sSL - fillPx)
+    strategy.exit("SX", from_entry="S", stop=sSL, limit=sTP)
+    sArm := false
+
+string alertJson = na
+
+if buyTrig and enableBuy
+    float slDist = close - buySL
+    bool blocked = inLong or (blockOpp and inShort)
+    bool tooClose = minSlTicks > 0 and slDist < minSlTicks * syminfo.mintick
+    if not blocked and not tooClose and slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("L", strategy.long, qty=qty, comment="BUY ema swing")
+        strategy.exit("LX", from_entry="L", stop=buySL, limit=close + tpR * slDist)   // provisional TP; SL active from fill
+        lSL := buySL
+        lTP := close + tpR * slDist
+        lArm := true
+        lSigBar := bar_index
+        alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BUY"' + ',"sl":' + str.tostring(buySL, "#.#####") + ',"tp_r":' + str.tostring(tpR) + ',"ref_price":' + str.tostring(close, "#.#####") + '}'
+    else if blocked
+        label.new(bar_index, low, "BUY blocked", style=label.style_label_up, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+    else if tooClose
+        label.new(bar_index, low, "BUY skipped: SL too close", style=label.style_label_up, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+if sellTrig and enableSell
+    float slDist = sellSL - close
+    bool blocked = inShort or (blockOpp and inLong)
+    bool tooClose = minSlTicks > 0 and slDist < minSlTicks * syminfo.mintick
+    if not blocked and not tooClose and slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("S", strategy.short, qty=qty, comment="SELL ema swing")
+        strategy.exit("SX", from_entry="S", stop=sellSL, limit=close - tpR * slDist)
+        sSL := sellSL
+        sTP := close - tpR * slDist
+        sArm := true
+        sSigBar := bar_index
+        alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"SELL"' + ',"sl":' + str.tostring(sellSL, "#.#####") + ',"tp_r":' + str.tostring(tpR) + ',"ref_price":' + str.tostring(close, "#.#####") + '}'
+    else if blocked
+        label.new(bar_index, high, "SELL blocked", style=label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+    else if tooClose
+        label.new(bar_index, high, "SELL skipped: SL too close", style=label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+if not na(alertJson)
+    alert(alertJson, alert.freq_once_per_bar_close)
+
+// --------------------------------------------------------------- visuals ----
+// entry markers
+plotshape(buyTrig and enableBuy,   title="BUY signal",  style=shape.triangleup,   location=location.belowbar, color=color.green, size=size.small, text="B")
+plotshape(sellTrig and enableSell, title="SELL signal", style=shape.triangledown, location=location.abovebar, color=color.red,   size=size.small, text="S")
+
+// SL / TP of the open trade
+float plotSL = inLong ? lSL : inShort ? sSL : na
+float plotTP = inLong ? lTP : inShort ? sTP : na
+plot(showLines ? plotSL : na, "SL", color=color.new(color.red, 0),   style=plot.style_linebr, linewidth=1)
+plot(showLines ? plotTP : na, "TP", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+plot(emaFast, "EMA fast", color=color.new(color.aqua, 0), linewidth=1)
+plot(emaSlow, "EMA slow", color=color.new(color.orange, 0), linewidth=1)
+
+// status table
+var table tbl = table.new(position.top_right, 2, 5, border_width=1)
+if barstate.islast
+    string segTxt = seg == 1 ? "HIGH seg" : seg == -1 ? "LOW seg" : "-"
+    table.cell(tbl, 0, 0, "RSI" + str.tostring(rsiSlowLen), text_size=size.small)
+    table.cell(tbl, 1, 0, str.tostring(rsiS, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 1, "RSI" + str.tostring(rsiFastLen), text_size=size.small)
+    table.cell(tbl, 1, 1, str.tostring(rsiF, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 2, "Segment", text_size=size.small)
+    table.cell(tbl, 1, 2, segTxt, text_size=size.small)
+    table.cell(tbl, 0, 3, "EMA f/s", text_size=size.small)
+    table.cell(tbl, 1, 3, str.tostring(emaFast, "#.##") + " / " + str.tostring(emaSlow, "#.##"), text_size=size.small)
+    table.cell(tbl, 0, 4, "Trend", text_size=size.small)
+    table.cell(tbl, 1, 4, trendUp ? "UP" : trendDn ? "DOWN" : "flat", text_size=size.small)
