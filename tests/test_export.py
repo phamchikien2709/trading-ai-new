@@ -180,6 +180,21 @@ def test_heatmap_has_one_panel_per_panel_col_combo():
     assert "RSI(" in fig.layout.annotations[0].text          # adapter title used as the subplot title
 
 
+def test_is_oos_labels_name_the_robust_axis_value():
+    from rsi_fvg.backtest.export import _fig_is_oos
+    df, rec, res, info = _fixture()
+    g = df[df["tf"] == "M5"]
+    fig = _fig_is_oos("M5", g, ADAPTER)
+    labels = list(fig.data[0].text)
+    assert len(labels) == len(g)
+    robust_col = ADAPTER.axis(ADAPTER.robust_axis).columns[0]
+    for label, (_, row) in zip(labels, g.iterrows()):
+        assert f"TP {row['tp_r']:g}R" in label
+        assert f"{robust_col}×{row[robust_col]:g}" in label
+        assert ADAPTER.title(row.to_dict()) in label
+    assert len(set(labels)) == len(labels)      # every combo is now distinguishable
+
+
 def test_unknown_strategy_in_run_info_is_an_error(tmp_path):
     from rsi_fvg.backtest.export import write_xlsx
     df, rec, res, info = _fixture()

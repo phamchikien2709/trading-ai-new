@@ -281,7 +281,8 @@ def _fig_heatmaps(tf: str, g: pd.DataFrame, adapter: StrategyAdapter) -> go.Figu
 
 
 def _fig_is_oos(tf: str, g: pd.DataFrame, adapter: StrategyAdapter) -> go.Figure:
-    labels = [f"TP {row['tp_r']:g}R · {adapter.title(row)}"
+    robust_col = adapter.axis(adapter.robust_axis).columns[0]
+    labels = [f"TP {row['tp_r']:g}R · {robust_col}×{row[robust_col]:g} · {adapter.title(row)}"
               f"<br>n={int(row['n_trades'])} · flags: {row['flags'] or '-'}"
               for row in g.to_dict("records")]
     fig = go.Figure(go.Scatter(x=g["is_avg_r"], y=g["oos_avg_r"], mode="markers", text=labels,
