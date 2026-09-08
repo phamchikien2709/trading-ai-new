@@ -1,0 +1,40 @@
+# RSI-FVG pullback — default config (Exness cent account, XAUUSDc)
+symbol: XAUUSDc
+timeframes: [M5, M15, H1]
+
+strategy:
+  rsi_period: 14
+  atr_period: 14
+  overbought: 75
+  oversold: 25
+  mid_high: 60
+  mid_low: 40
+  atr_mult: 1.0
+  pivot_len: 2
+  max_wait_bars: 0        # 0 = flag never expires (spec default)
+
+costs:
+  spread_points: 260      # XAUUSDc point=0.001 -> 260 pts = $0.26/oz (observed 2026-09-08)
+  commission_per_lot_rt: 0.0   # Exness Standard Cent: no commission. Set per broker.
+  slippage_points: 10     # $0.01/oz, applied adversely on entry and SL exit
+
+sizing:
+  risk_pct: 1.0
+  initial_equity: 10000
+
+engine:
+  concurrency: hedge      # hedge | single  (single = compare with Pine)
+  oos_frac: 0.2           # last 20% of bars = out-of-sample
+
+variants: [A, B, C]
+tp_r: [1, 1.5, 2, 3, 4]
+
+# Used only when data/<symbol>_<tf>.spec.json is missing
+symbol_spec_fallback:
+  point: 0.001
+  digits: 3
+  contract_size: 1.0
+  min_lot: 0.01
+  max_lot: 200
+  lot_step: 0.01
+  stops_level_points: 0
