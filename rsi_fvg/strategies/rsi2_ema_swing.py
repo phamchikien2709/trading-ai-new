@@ -12,8 +12,6 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-import numpy as np
-
 from ..bars import Bars
 from ..indicators import atr_wilder, ema, rsi_wilder
 from ..signals import Direction, Signal

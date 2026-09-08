@@ -13,7 +13,8 @@ class Direction(IntEnum):
 @dataclass(frozen=True)
 class Signal:
     direction: Direction
-    variant: str                 # "A" | "B" | "C" (RSI-FVG) or "SWING" (RSI2 swing)
+    variant: str                 # "A" | "B" | "C" (RSI-FVG), "SWING" (RSI2 swing),
+                                 # "EMASWING" (RSI2 swing + EMA trend)
     signal_bar: int
     anchor_bar: int
     ref_price: float

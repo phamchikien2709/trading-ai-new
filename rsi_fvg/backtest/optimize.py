@@ -17,14 +17,13 @@ import pandas as pd
 from ..bars import Bars
 from ..params import CostParams, SizingParams, SymbolSpec
 from ..signals import Signal
-from ..strategies.registry import StrategyAdapter, get_adapter
+from ..strategies.registry import StrategyAdapter
 from ..strategies.rsi2_swing import Rsi2SwingParams   # still used by make_params' annotation
 from .engine import BacktestResult, run_backtest
 from .metrics import compute_metrics, equity_from_trades, max_drawdown
 
-# Column names now come from the strategy adapter; this constant is the rsi2_swing view of them,
-# kept because the delivered reports and CSVs use it.
-KEY_COLS = get_adapter("rsi2_swing").full_key_cols()
+# Grid column names come from the strategy adapter (`adapter.full_key_cols()`); there is no
+# module-level copy of them, so nothing here can drift from the strategy actually being run.
 SPLIT_KEYS = ("n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct", "net_pnl", "expectancy_usd")
 
 # Recommendation gates (spec §4.3). A combo has to be profitable in cash, not just in R:

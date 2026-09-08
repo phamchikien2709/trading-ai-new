@@ -274,3 +274,26 @@ def test_unknown_strategy_in_run_info_is_an_error(tmp_path):
     df, rec, res, info = _fixture()
     with pytest.raises(KeyError):
         write_xlsx(tmp_path / "r.xlsx", df, rec, res, info | {"strategy": "nope"})
+
+
+def test_missing_strategy_in_run_info_is_an_error(tmp_path):
+    """No silent default: a run_info without 'strategy' used to be read as rsi2_swing, which
+    reorders another strategy's grid.csv wrongly and only blows up later in the heatmaps."""
+    from rsi_fvg.backtest.export import adapter_from_run_info
+    df, rec, res, info = _fixture()
+    bare = {k: v for k, v in info.items() if k != "strategy"}
+    with pytest.raises(KeyError, match="run_info needs a 'strategy' key"):
+        adapter_from_run_info(bare)
+    with pytest.raises(KeyError, match="run_info needs a 'strategy' key"):
+        write_xlsx(tmp_path / "r.xlsx", df, rec, res, bare)
+
+
+@pytest.mark.parametrize("strategy", STRATEGIES)
+def test_html_titles_name_the_strategy(tmp_path, strategy):
+    """K: the <h1>/<title> were hardcoded to RSI2 Swing, so an rsi2_ema_swing report carried
+    the wrong name."""
+    df, rec, res, info = _fixture(strategy)
+    write_html(tmp_path / "r.html", df, rec, res, info)
+    html = (tmp_path / "r.html").read_text(encoding="utf-8")
+    assert f"<title>{strategy} report</title>" in html
+    assert f"<h1>{strategy} — Backtest & Optimisation" in html

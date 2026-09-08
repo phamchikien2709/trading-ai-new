@@ -71,6 +71,19 @@ def test_robust_axis_must_be_single_column():
                         params_cls=Rsi2SwingParams, run=run_strategy, robust_axis="pair")
 
 
+def test_default_axes_must_cover_every_declared_axis():
+    # A strategy that declares an axis but forgets its defaults used to fail deep inside
+    # GridSpec.combos with a bare KeyError; the adapter now refuses to be built.
+    from rsi_fvg.strategies.registry import Axis, StrategyAdapter
+    from rsi_fvg.strategies.rsi2_swing import Rsi2SwingParams, run_strategy
+    with pytest.raises(ValueError) as e:
+        StrategyAdapter(name="bad", axes=(Axis("atr_mult", ("atr_mult",), ("atr_mult",)),
+                                          Axis("forgotten", ("f",), ("fast_hi",))),
+                        default_axes={"atr_mult": (1.0,)}, default_tp_r=(1.0,),
+                        params_cls=Rsi2SwingParams, run=run_strategy)
+    assert "forgotten" in str(e.value)
+
+
 def test_rsi2_ema_swing_adapter():
     from rsi_fvg.backtest.optimize import GridSpec
     from rsi_fvg.strategies.rsi2_ema_swing import Rsi2EmaParams

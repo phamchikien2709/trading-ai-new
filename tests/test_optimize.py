@@ -270,7 +270,9 @@ def test_grid_columns_come_from_the_adapter():
     for c in KEY_COLS:
         assert c in df.columns
     assert df["rsi_fast"].dtype.kind == "i"
-    assert list(df.columns[:len(KEY_COLS) - 1]) == KEY_COLS[:-1] or set(KEY_COLS) <= set(df.columns)
+    # The `or set(KEY_COLS) <= set(df.columns)` disjunct this used to carry made the whole
+    # assertion vacuous (the loop above already guarantees it) — the column ORDER is the claim.
+    assert list(df.columns[:len(KEY_COLS) - 1]) == KEY_COLS[:-1]
 
 
 def test_gridspec_is_immutable_and_hashable_by_identity():

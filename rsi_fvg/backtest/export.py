@@ -29,10 +29,14 @@ def grid_first_cols(adapter: StrategyAdapter) -> list[str]:
 
 
 def adapter_from_run_info(run_info: dict) -> StrategyAdapter:
-    return get_adapter(run_info.get("strategy", "rsi2_swing"))
+    """The adapter this run was produced with. Required, never defaulted: guessing a strategy
+    would reorder another one's grid.csv wrongly and only surface later as a KeyError in the
+    heatmaps."""
+    if "strategy" not in run_info:
+        raise KeyError("run_info needs a 'strategy' key naming a registered strategy")
+    return get_adapter(run_info["strategy"])
 
 
-GRID_FIRST_COLS = grid_first_cols(get_adapter("rsi2_swing"))
 REC_COLS = ["n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct", "net_pnl", "ruined",
             "oversized_share", "capped_share", "is_n_trades", "is_avg_r", "oos_n_trades", "oos_avg_r",
             "robust_r", "robust_ratio", "grid_edge"]
@@ -323,7 +327,7 @@ def write_html(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[s
         return fig.to_html(full_html=False, include_plotlyjs=js)
 
     e = _html.escape
-    parts = [f"<h1>RSI2 Swing Pullback — Backtest & Optimisation — {e(str(run_info.get('symbol', '')))}</h1>",
+    parts = [f"<h1>{e(adapter.name)} — Backtest & Optimisation — {e(str(run_info.get('symbol', '')))}</h1>",
              f"<p class='muted'>Generated {e(str(run_info.get('generated_at', '')))} · code {e(str(run_info.get('git_hash', '')))}</p>",
              _fmt_table(_info_table(run_info), ["key", "value"])]
 
@@ -370,6 +374,7 @@ def write_html(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[s
         counts = flagged["flags"].str.split(";").explode().value_counts()
         parts.append(_fmt_table(counts.rename_axis("flag").reset_index(name="combos"), ["flag", "combos"]))
 
-    html = ("<!doctype html><html><head><meta charset='utf-8'><title>RSI2 Swing report</title>"
+    html = ("<!doctype html><html><head><meta charset='utf-8'>"
+            f"<title>{e(adapter.name)} report</title>"
             f"<style>{_CSS}</style></head><body>{''.join(parts)}</body></html>")
     path.write_text(html, encoding="utf-8")

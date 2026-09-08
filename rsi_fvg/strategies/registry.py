@@ -6,10 +6,9 @@ column names from here, so adding a strategy is one module plus one registry ent
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field, replace
-from typing import Callable, Sequence
+from dataclasses import dataclass, replace
+from typing import Callable
 
-from ..bars import Bars
 from ..signals import Signal
 from .rsi2_ema_swing import Rsi2EmaParams
 from .rsi2_ema_swing import run_strategy as run_rsi2_ema_swing
@@ -64,6 +63,12 @@ class StrategyAdapter:
     def __post_init__(self) -> None:
         if len(self.axis(self.robust_axis).columns) != 1:
             raise ValueError(f"{self.name}: robust axis {self.robust_axis!r} must map to exactly one column")
+        # Without this, a strategy that declares an axis and forgets its defaults only fails
+        # much later, as a bare KeyError inside GridSpec.combos.
+        missing = {a.name for a in self.axes} - set(self.default_axes)
+        if missing:
+            raise ValueError(f"{self.name}: default_axes is missing {sorted(missing)}; "
+                             f"every declared axis needs default values")
 
     def axis(self, name: str) -> Axis:
         for a in self.axes:
