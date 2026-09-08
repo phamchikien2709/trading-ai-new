@@ -254,8 +254,7 @@ if buyTrig and enableBuy
         lTP := close + tpR * slDist
         lArm := true
         lSigBar := bar_index
-        alertJson := str.format('{"symbol":"{0}","tf":"{1}","direction":"BUY","variant":"{2}","sl":{3,number,#.#####},"tp_r":{4},"ref_price":{5,number,#.#####},"bars_in_wait":{6}}',
-             syminfo.ticker, timeframe.period, variant, buySL, tpR, close, buyWait)
+        alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BUY"' + ',"variant":"' + variant + '"' + ',"sl":' + str.tostring(buySL, "#.#####") + ',"tp_r":' + str.tostring(tpR) + ',"ref_price":' + str.tostring(close, "#.#####") + ',"bars_in_wait":' + str.tostring(buyWait) + '}'
     else if blocked
         label.new(bar_index, low, "BUY blocked", style=label.style_label_up, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
 
@@ -271,8 +270,7 @@ if sellTrig and enableSell
         sTP := close - tpR * slDist
         sArm := true
         sSigBar := bar_index
-        alertJson := str.format('{"symbol":"{0}","tf":"{1}","direction":"SELL","variant":"{2}","sl":{3,number,#.#####},"tp_r":{4},"ref_price":{5,number,#.#####},"bars_in_wait":{6}}',
-             syminfo.ticker, timeframe.period, variant, sellSL, tpR, close, sellWait)
+        alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"SELL"' + ',"variant":"' + variant + '"' + ',"sl":' + str.tostring(sellSL, "#.#####") + ',"tp_r":' + str.tostring(tpR) + ',"ref_price":' + str.tostring(close, "#.#####") + ',"bars_in_wait":' + str.tostring(sellWait) + '}'
     else if blocked
         label.new(bar_index, high, "SELL blocked", style=label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
 
