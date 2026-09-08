@@ -81,6 +81,28 @@ def test_run_single_matches_grid_row():
         assert len(sigs) == row.n_signals and len(res.trades) == row.n_trades
 
 
+def test_min_sl_filter_is_recorded_and_counted():
+    b = _bars()
+    off = run_optimization({"M5": b}, {"M5": SPEC}, Rsi2SwingParams(), SMALL, COSTS, SIZING)
+    assert (off["min_sl_mult"] == 0.0).all() and (off["n_rejected_min_sl"] == 0).all()
+    assert (off["n_trades"] > 0).any()
+    # An absurd multiple (0.20 spread x 1e6) rejects every fill: no trades, all skips counted.
+    on = run_optimization({"M5": b}, {"M5": SPEC}, Rsi2SwingParams(), SMALL, COSTS, SIZING,
+                          min_sl_spread_mult=1e6)
+    assert (on["min_sl_mult"] == 1e6).all()
+    assert (on["n_trades"] == 0).all()
+    gap = on["n_signals"] - on["n_rejected_min_sl"]                    # a last-bar signal never fills
+    assert ((gap >= 0) & (gap <= 1)).all() and (on["n_rejected_min_sl"] > 0).all()
+
+
+def test_run_single_honours_the_min_sl_filter():
+    b = _bars()
+    params = Rsi2SwingParams()
+    sigs, res = run_single(b, SPEC, params, 2.0, COSTS, SIZING, "hedge", min_sl_spread_mult=1e6)
+    assert len(sigs) > 0 and len(res.trades) == 0
+    assert (res.skipped["reason"] == "rejected_min_sl").all()
+
+
 def _robust_df(**over):
     base = {"tf": "M5", "rsi_fast": 2, "ob": 75.0, "os": 25.0, "f_hi": 90.0, "f_lo": 10.0,
             "tp_r": [1.0, 1.0, 2.0, 2.0], "atr_mult": [0.5, 1.0, 0.5, 1.0],

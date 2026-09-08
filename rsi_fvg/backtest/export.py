@@ -16,7 +16,8 @@ from .engine import BacktestResult
 from .metrics import monthly_table
 from .optimize import FILTER_TEXT, KEY_COLS
 
-GRID_FIRST_COLS = KEY_COLS + ["n_signals", "n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct",
+GRID_FIRST_COLS = KEY_COLS + ["n_signals", "n_rejected_min_sl",
+                              "n_trades", "win_rate", "avg_r", "profit_factor", "max_dd_pct",
                               "net_pnl", "final_equity", "ruined", "oversized_share", "capped_share",
                               "is_n_trades", "is_avg_r", "is_max_dd_pct", "oos_n_trades", "oos_avg_r",
                               "oos_max_dd_pct", "robust_r", "robust_ratio", "grid_edge", "flags"]
@@ -189,7 +190,8 @@ def write_xlsx(path: Path, grid_df: pd.DataFrame, rec: dict, rec_results: dict[s
 
         params = _info_table({k: run_info[k] for k in ("grid", "initial_equity", "risk_pct", "concurrency",
                                                         "spread_points", "commission_per_lot_rt",
-                                                        "slippage_points", "is_frac", "git_hash") if k in run_info})
+                                                        "slippage_points", "is_frac", "min_sl_mult",
+                                                        "htf_seconds", "git_hash") if k in run_info})
         params.to_excel(xw, sheet_name="Params", index=False)
         _bold_header(xw.sheets["Params"])
 

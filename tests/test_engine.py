@@ -207,6 +207,20 @@ def test_ruin_floor_is_configurable(mk_bars):
     assert zero.ruined is False and len(zero.trades) == 7
 
 
+def test_min_sl_spread_mult_rejects_a_stop_inside_the_spread(mk_bars):
+    # V2: fill 100.20 (open + 0.20 spread), SL 99.70 -> sl_dist 0.50, i.e. 2.5 spreads.
+    bars = mk_bars(o=[100, 100, 100, 100], h=[100.1] * 4, l=[99.8] * 4, c=[100] * 4)
+    sigs = [sig(Direction.BUY, 0, sl=99.7)]
+    tight = run_backtest(bars, sigs, 1.0, SPEC, COSTS, SIZING, min_sl_spread_mult=5.0)   # needs 1.00
+    assert len(tight.trades) == 0
+    assert list(tight.skipped["reason"]) == ["rejected_min_sl"]
+    assert list(tight.skipped.columns) == SKIPPED_COLUMNS
+    off = run_backtest(bars, sigs, 1.0, SPEC, COSTS, SIZING)                             # filter off
+    assert len(off.trades) == 1 and off.skipped.empty
+    passes = run_backtest(bars, sigs, 1.0, SPEC, COSTS, SIZING, min_sl_spread_mult=2.0)  # needs 0.40
+    assert len(passes.trades) == 1 and passes.skipped.empty
+
+
 def test_signal_on_last_bar_never_fills(mk_bars):
     bars = mk_bars(o=[100, 100], h=[101, 101], l=[99, 99], c=[100, 100])
     res = run_backtest(bars, [sig(Direction.BUY, 1, sl=90.0)], 3.0, SPEC, COSTS, SIZING)

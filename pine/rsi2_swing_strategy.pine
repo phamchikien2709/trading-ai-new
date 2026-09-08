@@ -53,6 +53,8 @@ fLo        = input.float(10, "Cross down -> LOW segment starts / HIGH segment en
 grpSL = "Stop loss"
 atrLen  = input.int(14, "ATR length", minval=1, group=grpSL)
 atrMult = input.float(1.0, "ATR multiplier below/above swing", minval=0, step=0.25, group=grpSL)
+minSlTicks = input.int(0, "Min SL distance (ticks, 0 = off)", minval=0, group=grpSL,
+     tooltip="Skip the trade when the stop sits closer than this to the entry. The RSI2 structure can put it inside the spread, where a nominal 5% risk is a coin flip on the next tick.")
 
 grpViz = "Display"
 showSwings = input.bool(true, "Swing markers + zigzag", group=grpViz)
@@ -233,9 +235,10 @@ if sArm and inShort
 string alertJson = na
 
 if buyTrig and enableBuy
-    bool blocked = inLong or (blockOpp and inShort)
     float slDist = close - buySL
-    if not blocked and slDist > 0
+    bool blocked = inLong or (blockOpp and inShort)
+    bool tooClose = minSlTicks > 0 and slDist < minSlTicks * syminfo.mintick
+    if not blocked and not tooClose and slDist > 0
         float riskUsd = strategy.equity * riskPct / 100.0
         float qty = riskUsd / (slDist * syminfo.pointvalue)
         strategy.entry("L", strategy.long, qty=qty, comment="BUY swing")
@@ -247,11 +250,14 @@ if buyTrig and enableBuy
         alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BUY"' + ',"sl":' + str.tostring(buySL, "#.#####") + ',"tp_r":' + str.tostring(tpR) + ',"ref_price":' + str.tostring(close, "#.#####") + ',"bars_since_flag":' + str.tostring(buyWait) + '}'
     else if blocked
         label.new(bar_index, low, "BUY blocked", style=label.style_label_up, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+    else if tooClose
+        label.new(bar_index, low, "BUY skipped: SL too close", style=label.style_label_up, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
 
 if sellTrig and enableSell
-    bool blocked = inShort or (blockOpp and inLong)
     float slDist = sellSL - close
-    if not blocked and slDist > 0
+    bool blocked = inShort or (blockOpp and inLong)
+    bool tooClose = minSlTicks > 0 and slDist < minSlTicks * syminfo.mintick
+    if not blocked and not tooClose and slDist > 0
         float riskUsd = strategy.equity * riskPct / 100.0
         float qty = riskUsd / (slDist * syminfo.pointvalue)
         strategy.entry("S", strategy.short, qty=qty, comment="SELL swing")
@@ -263,6 +269,8 @@ if sellTrig and enableSell
         alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"SELL"' + ',"sl":' + str.tostring(sellSL, "#.#####") + ',"tp_r":' + str.tostring(tpR) + ',"ref_price":' + str.tostring(close, "#.#####") + ',"bars_since_flag":' + str.tostring(sellWait) + '}'
     else if blocked
         label.new(bar_index, high, "SELL blocked", style=label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+    else if tooClose
+        label.new(bar_index, high, "SELL skipped: SL too close", style=label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
 
 if not na(alertJson)
     alert(alertJson, alert.freq_once_per_bar_close)

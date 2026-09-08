@@ -68,6 +68,8 @@ def main() -> int:
     ap.add_argument("--rsi-fast", nargs="*", type=int, default=[2],
                     help="structure-RSI lengths to scan (grid axis); 2 = the Pine default")
     ap.add_argument("--max-wait", type=int, default=0)
+    ap.add_argument("--min-sl-mult", type=float, default=0.0,
+                    help="reject a fill whose SL sits closer than this many spreads to the entry (0 = off)")
     ap.add_argument("--is-frac", type=float, default=0.7)
     ap.add_argument("--data-dir", default=str(ROOT / "data"),
                     help="cache dir; a missing cache triggers a live MT5 fetch of full history")
@@ -105,7 +107,7 @@ def main() -> int:
 
     print(f"grid: {grid.size()} combos x {len(tfs)} TF")
     grid_df = run_optimization(bars_by_tf, spec_by_tf, base, grid, cfg.costs, sizing, a.concurrency,
-                               is_frac=a.is_frac, progress=progress)
+                               is_frac=a.is_frac, progress=progress, min_sl_spread_mult=a.min_sl_mult)
     rec = recommend(grid_df)
 
     rec_results = {}
@@ -115,13 +117,14 @@ def main() -> int:
         p = r["params"]
         params = make_params(base, p["ob"], p["os"], p["f_hi"], p["f_lo"], p["atr_mult"],
                              rsi_fast=int(p["rsi_fast"]))
-        _, res = run_single(bars_by_tf[tf], spec_by_tf[tf], params, p["tp_r"], cfg.costs, sizing, a.concurrency)
+        _, res = run_single(bars_by_tf[tf], spec_by_tf[tf], params, p["tp_r"], cfg.costs, sizing, a.concurrency,
+                            min_sl_spread_mult=a.min_sl_mult)
         rec_results[tf] = res
 
     run_info = {"symbol": symbol, "timeframes": tfs, "data_range": ranges, "initial_equity": sizing.initial_equity,
                 "risk_pct": sizing.risk_pct, "concurrency": a.concurrency, "spread_points": cfg.costs.spread_points,
                 "commission_per_lot_rt": cfg.costs.commission_per_lot_rt, "slippage_points": cfg.costs.slippage_points,
-                "is_frac": a.is_frac, "max_wait": a.max_wait,
+                "is_frac": a.is_frac, "max_wait": a.max_wait, "min_sl_mult": a.min_sl_mult,
                 "grid": {"tp_r": list(grid.tp_r), "atr_mult": list(grid.atr_mult), "rsi14": a.rsi14, "rsi2": a.rsi2,
                          "rsi_fast": list(grid.rsi_fast)},
                 "git_hash": _git_hash(), "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M")}

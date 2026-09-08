@@ -15,6 +15,11 @@ SL exits (and entries) do. A real stop is a market order into a moving book; a r
 order fills at its price or not at all. Results are therefore very slightly optimistic on
 the TP side — a TP that would have been missed by a tick is booked as a win.
 
+Minimum SL distance (V2): with `min_sl_spread_mult > 0` a fill whose stop sits closer than
+`min_sl_spread_mult` spreads to the entry is refused (`rejected_min_sl` in the `skipped` frame,
+no position opened). The RSI(2) structure can put the stop $1-2 away on M5 — inside the noise
+the spread itself makes — where a nominal 5% risk is really a coin flip on the next tick.
+
 Ruin floor (C2): when marked equity at a bar's close falls to `ruin_floor_pct` of the
 starting equity the account is treated as blown — open positions are closed at that close
 with `exit_reason="ruin"`, no further fills are accepted, and the equity curve stays flat.
@@ -80,7 +85,7 @@ def _to_frame(rows: list[dict], columns: list[str]) -> pd.DataFrame:
 
 def run_backtest(bars: Bars, signals: list[Signal], tp_r: float, spec: SymbolSpec, costs: CostParams,
                  sizing: SizingParams, concurrency: str = "hedge",
-                 ruin_floor_pct: float = 0.10) -> BacktestResult:
+                 ruin_floor_pct: float = 0.10, min_sl_spread_mult: float = 0.0) -> BacktestResult:
     if concurrency not in ("hedge", "single"):
         raise ValueError(f"concurrency must be 'hedge' or 'single', got {concurrency!r}")
     n = len(bars)
@@ -138,6 +143,9 @@ def run_backtest(bars: Bars, signals: list[Signal], tp_r: float, spec: SymbolSpe
                 skip(s, t, "rejected_invalid_sl")
                 continue
             sl_dist = abs(fill - s.sl_price)
+            if min_sl_spread_mult > 0 and sl_dist < min_sl_spread_mult * spread:
+                skip(s, t, "rejected_min_sl")
+                continue
             lots, oversized, capped = lots_for_risk(equity, sizing.risk_pct, sl_dist, spec)
             commission = costs.commission_per_lot_rt * lots
             equity -= commission

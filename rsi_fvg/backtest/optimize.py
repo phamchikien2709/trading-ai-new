@@ -63,9 +63,11 @@ def make_params(base: Rsi2SwingParams, ob: float, os_: float, f_hi: float, f_lo:
 
 
 def run_single(bars: Bars, spec: SymbolSpec, params: Rsi2SwingParams, tp_r: float, costs: CostParams,
-               sizing: SizingParams, concurrency: str) -> tuple[list[Signal], BacktestResult]:
+               sizing: SizingParams, concurrency: str,
+               min_sl_spread_mult: float = 0.0) -> tuple[list[Signal], BacktestResult]:
     signals = run_strategy(bars, params)
-    return signals, run_backtest(bars, signals, float(tp_r), spec, costs, sizing, concurrency)
+    return signals, run_backtest(bars, signals, float(tp_r), spec, costs, sizing, concurrency,
+                                 min_sl_spread_mult=min_sl_spread_mult)
 
 
 def _col(g: pd.DataFrame, name: str, default) -> pd.Series:
@@ -89,7 +91,8 @@ def _segment_metrics(trades_seg: pd.DataFrame, equity_slice: pd.Series, init: fl
 
 def run_optimization(bars_by_tf: dict[str, Bars], spec_by_tf: dict[str, SymbolSpec], base: Rsi2SwingParams,
                      grid: GridSpec, costs: CostParams, sizing: SizingParams, concurrency: str = "hedge",
-                     is_frac: float = 0.7, progress: Callable[[int, int], None] | None = None) -> pd.DataFrame:
+                     is_frac: float = 0.7, progress: Callable[[int, int], None] | None = None,
+                     min_sl_spread_mult: float = 0.0) -> pd.DataFrame:
     total = grid.size() * len(bars_by_tf)
     init = sizing.initial_equity
     rows: list[dict] = []
@@ -104,9 +107,12 @@ def run_optimization(bars_by_tf: dict[str, Bars], spec_by_tf: dict[str, SymbolSp
                         params = make_params(base, ob, os_, f_hi, f_lo, am, rsi_fast=rf_len)
                         signals = run_strategy(bars, params)
                         for tp in grid.tp_r:
-                            res = run_backtest(bars, signals, float(tp), spec, costs, sizing, concurrency)
+                            res = run_backtest(bars, signals, float(tp), spec, costs, sizing, concurrency,
+                                               min_sl_spread_mult=min_sl_spread_mult)
                             tr = res.trades
-                            n_blocked = int((res.skipped["reason"] == "blocked").sum()) if len(res.skipped) else 0
+                            reasons = res.skipped["reason"] if len(res.skipped) else None
+                            n_blocked = int((reasons == "blocked").sum()) if reasons is not None else 0
+                            n_min_sl = int((reasons == "rejected_min_sl").sum()) if reasons is not None else 0
                             full = compute_metrics(tr, res.equity, init, n_blocked=n_blocked, n_bars=n_bars)
                             is_tr = tr[tr["entry_time"] < split]
                             oos_tr = tr[tr["entry_time"] >= split]
@@ -116,6 +122,7 @@ def run_optimization(bars_by_tf: dict[str, Bars], spec_by_tf: dict[str, SymbolSp
                             row = {"tf": tf, "rsi_fast": int(rf_len), "ob": float(ob), "os": float(os_),
                                    "f_hi": float(f_hi), "f_lo": float(f_lo),
                                    "atr_mult": float(am), "tp_r": float(tp), "n_signals": len(signals),
+                                   "min_sl_mult": float(min_sl_spread_mult), "n_rejected_min_sl": n_min_sl,
                                    "split_time": split, "ruined": bool(res.ruined), "ruin_time": res.ruin_time,
                                    "oversized_share": float(tr["oversized"].astype(bool).mean()) if len(tr) else 0.0,
                                    "capped_share": float(tr["capped"].astype(bool).mean()) if len(tr) else 0.0}
