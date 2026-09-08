@@ -47,7 +47,7 @@ Hai state machine BUY và SELL chạy độc lập, song song. Tất cả sự k
 | WAIT | entry trigger theo variant (2.4) | **phát Signal** → IDLE |
 | WAIT | `max_wait_bars > 0` và `t − wait_start > max_wait_bars` | IDLE (hết hạn) |
 
-Thứ tự ưu tiên khi nhiều sự kiện xảy ra cùng bar trong WAIT: re-cross 75 → hết hạn → entry trigger.
+Thứ tự ưu tiên khi nhiều sự kiện xảy ra cùng bar trong WAIT: re-cross 75 → hết hạn → entry trigger. Entry trigger chỉ được đánh giá từ nến **sau** nến chuyển ARMED→WAIT (tức `t > wait_start`).
 
 **Quy tắc:** một lần cross up 75 → tối đa một Signal. State machine **không biết về vị thế**: khi trigger, nó luôn phát Signal và về IDLE. Việc có thực thi Signal hay không (đang có lệnh cùng chiều → bỏ qua, log `blocked`) là trách nhiệm của engine/bot. Điều này cho phép live bot chạy lại state machine từ đầu mỗi nến (replay) mà không cần lưu trạng thái.
 
@@ -92,7 +92,8 @@ Signal:
 ### 2.7 Sizing & chi phí
 
 - `lots = floor((equity × risk_pct) / (|fill − SL| × contract_size) / lot_step) × lot_step`, kẹp trong `[min_lot, max_lot]`. XAUUSD `contract_size = 100`. `risk_pct` mặc định 1%. Nếu lots tính ra `< min_lot` → dùng `min_lot` (rủi ro thực > risk_pct, ghi cờ `oversized` trong trade log).
-- Chi phí (tham số, mặc định): `spread_points = 25`, `commission_per_lot_rt = 7.0` USD, `slippage_points = 1` (cộng vào bất lợi ở cả entry và exit). `point = 0.01` cho XAUUSD.
+- Chi phí (tham số): `spread_points`, `commission_per_lot_rt` USD, `slippage_points` (cộng vào bất lợi ở cả entry và exit).
+- **Symbol spec (`point, digits, contract_size, min/max/step lot, stops_level`) đọc từ MT5 `symbol_info` lúc kéo data và lưu sidecar JSON cạnh parquet; backtest dùng spec đó.** Broker hiện tại (Exness cent): symbol `XAUUSDc`, `point = 0.001`, `contract_size = 1.0`, spread ~260 points. Config có fallback nếu không có sidecar.
 
 ### 2.8 Concurrency
 
