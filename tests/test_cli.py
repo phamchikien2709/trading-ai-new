@@ -14,7 +14,7 @@ from rsi_fvg.data.mt5_loader import cache_paths
 from rsi_fvg.params import SymbolSpec
 
 ROOT = Path(__file__).resolve().parents[1]
-SYMBOL = "XCLITEST"
+SYMBOL = "XAUUSDc"  # matches config/default.yaml's default symbol, so CLI runs that omit --symbol find the cache
 
 
 def _write_cache(data_dir: Path, n: int = 3000, seed: int = 7) -> None:
@@ -77,3 +77,55 @@ def test_pairs_rejects_malformed_values():
 def test_data_dir_help_mentions_the_live_fetch():
     text = (ROOT / "scripts" / "run_rsi2_swing.py").read_text(encoding="utf-8")
     assert "a missing cache triggers a live MT5 fetch of full history" in text
+
+
+def test_optimize_cli_runs_rsi2_ema_swing(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_cache(data_dir)
+    out = tmp_path / "results"
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "optimize.py"),
+                        "--strategy", "rsi2_ema_swing", "--tf", "M5",
+                        "--axis", "ema=20/100", "--axis", "atr_mult=1.5",
+                        "--axis", "rsi_fast=2", "--axis", "rsi2=90/10",
+                        "--tp", "4", "--risk", "1",
+                        "--data-dir", str(data_dir), "--out", str(out)],
+                       cwd=ROOT, capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0, r.stdout + r.stderr
+    folders = list((out).glob("*"))
+    assert len(folders) == 1
+    produced = {p.name for p in folders[0].iterdir()}
+    assert "grid.csv" in produced
+    assert any(n.startswith("report_") and n.endswith(".xlsx") for n in produced)
+    assert any(n.startswith("report_") and n.endswith(".html") for n in produced)
+    head = (folders[0] / "grid.csv").read_text(encoding="utf-8").splitlines()[0].split(",")
+    assert head[:8] == ["tf", "rsi_fast", "f_hi", "f_lo", "ema_fast", "ema_slow", "atr_mult", "tp_r"]
+
+
+def test_optimize_cli_runs_rsi2_swing_too(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_cache(data_dir)
+    out = tmp_path / "results2"
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "optimize.py"),
+                        "--strategy", "rsi2_swing", "--tf", "M5",
+                        "--axis", "rsi14=80/20", "--axis", "rsi2=90/10",
+                        "--axis", "rsi_fast=2", "--axis", "atr_mult=1.5",
+                        "--tp", "4", "--risk", "1",
+                        "--data-dir", str(data_dir), "--out", str(out)],
+                       cwd=ROOT, capture_output=True, text=True, timeout=600)
+    assert r.returncode == 0, r.stdout + r.stderr
+    head = (next((out).glob("*")) / "grid.csv").read_text(encoding="utf-8").splitlines()[0].split(",")
+    assert head[:8] == ["tf", "rsi_fast", "ob", "os", "f_hi", "f_lo", "atr_mult", "tp_r"]
+
+
+def test_optimize_cli_rejects_bad_axis(tmp_path):
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    _write_cache(data_dir)
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "optimize.py"),
+                        "--strategy", "rsi2_ema_swing", "--tf", "M5", "--axis", "nope=1",
+                        "--data-dir", str(data_dir), "--out", str(tmp_path / "r3")],
+                       cwd=ROOT, capture_output=True, text=True, timeout=300)
+    assert r.returncode != 0
+    assert "nope" in (r.stdout + r.stderr)

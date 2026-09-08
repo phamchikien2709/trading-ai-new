@@ -49,6 +49,7 @@ MT5 integration tests skip automatically when the terminal is not running.
 - No session filter, trailing stop or partial TP (by design, see specs).
 - Live bot, MQL5 EA and cross-platform parity checks are a later phase.
 - Pine ↔ Python parity is a manual spot-check (TradingView uses a different feed than Exness).
+- `ema()` leaves the first `period-1` bars NaN (no signals in the EMA warm-up); Pine's `ta.ema` emits values there.
 
 ## RSI2 Swing Pullback — optimisation & report
 
@@ -95,3 +96,28 @@ parameter set", never a forced pick.
 
 A pick sitting on the first or last value of the TP or ATR grid is marked `grid_edge` / "(grid edge)": the
 optimum may lie outside the grid, so widen it before trusting the number.
+
+## RSI2 Swing + EMA Trend — `rsi2_ema_swing`
+
+Enter on every confirmed RSI(2) swing whose side agrees with an EMA trend: BUY on a confirmed
+swing low while EMA fast > EMA slow, SELL on a confirmed swing high while EMA fast < EMA slow.
+SL = swing ∓ ATR×mult, TP = R multiple of that risk. Strategy: `rsi_fvg/strategies/rsi2_ema_swing.py`,
+Pine twin: `pine/rsi2_ema_swing_strategy.pine`. Spec: `docs/superpowers/specs/2026-09-08-rsi2-ema-swing-strategy-design.md`.
+
+    python scripts/optimize.py --strategy rsi2_ema_swing --tf M5 M15 H1 --risk 1
+    python scripts/optimize.py --strategy rsi2_ema_swing --tf M5 --axis ema=20/100,50/200 --tp 4 8
+    python scripts/optimize.py --strategy rsi2_ema_swing --list-axes
+    python scripts/optimize.py --strategy rsi2_swing --tf M15 --axis rsi14=80/20 --htf 3600
+
+`scripts/optimize.py` is the generic front end: `--strategy` picks a registered strategy,
+`--axis NAME=V1,V2` overrides one grid axis (pairs written `a/b`), and any axis you leave out
+keeps that strategy's defaults. Output goes to `results/<strategy>/<timestamp>/` with the same
+`grid.csv` / `report_<symbol>.xlsx` / `report_<symbol>.html` set as before.
+`scripts/run_rsi2_swing.py` still works and is unchanged.
+
+Default grid for `rsi2_ema_swing`: RSI fast (2, 3, 5) × levels (90/10, 95/5) ×
+EMA (20/100, 20/200, 50/200, 10/50) × ATR mult (1, 1.5, 2, 3) × TP (2, 4, 6, 8) = 384 combos per timeframe.
+
+Adding a strategy: write the module, then one `StrategyAdapter` entry in
+`rsi_fvg/strategies/registry.py` declaring its axes and the grid columns they expand to. The
+optimizer, the reports and both CLIs read the column names from there.
