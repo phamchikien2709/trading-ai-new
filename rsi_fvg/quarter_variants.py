@@ -188,6 +188,18 @@ TIE_BREAK = SCREEN_VARIANTS
 # chỉ báo mô tả, không tuyên bố gì, không tính vào số kiểm định.
 PRIMARY_TIER = "q90"
 
+# Số lưới null hữu hạn tối thiểu để "vượt cả mọi lưới null" còn ĐẠT ĐƯỢC mức
+# α = 2,5%. p-value một phía đạt được là (k+1)/(N+1), N = số null hữu hạn.
+# "Vượt cả mọi lưới" nghĩa là k=0, cho p tối thiểu = 1/(N+1). Đòi
+# 1/(N+1) <= 0,025 <=> N+1 >= 40 <=> N >= 39. Nếu N < 39 thì dù giá trị thật
+# vượt cả N lưới null hữu hạn, p tối thiểu đạt được vẫn > 2,5% — "beat_all_nulls"
+# đọc True lúc đó sẽ là một câu dối: nó báo pass ở một α lỏng hơn mức đã chốt.
+# Hằng số này KHÔNG phải con số 69 của tầng q90 (đó là số lưới null XIN được,
+# thứ có thể bị NaN bào mòn) — nó là ngưỡng SÀN bất biến cho mọi tầng, mọi lần
+# chạy, để cờ `beat_all_nulls` không thể nói dối về α dù lưới null bị NaN thu
+# hẹp bao nhiêu.
+MIN_FINITE_NULLS_FOR_ALPHA = 39
+
 
 def split_halves(bars: Bars) -> tuple[Bars, Bars]:
     """Chia mảng bar làm hai tại `len//2`; bar dư thuộc NỬA SAU (spec 1b §3).
@@ -239,6 +251,13 @@ def confirm(bars_second: Bars, tier: str, offsets: np.ndarray, variant: str,
     tầng q90 có 69 lưới null nên α ≤ 2,5% đòi k = 0, tức giá trị thật phải
     vượt CẢ 69 lưới. Dùng `percentile > 95` sẽ nới ngưỡng một cách âm thầm —
     percentile 96 trên 69 lưới vẫn còn 2 lưới null vượt giá trị thật.
+
+    `beat_all_nulls` còn đòi số null hữu hạn >= `MIN_FINITE_NULLS_FOR_ALPHA`.
+    Không có điều kiện này, nếu NaN bào mòn lưới null xuống còn ví dụ 20 lưới
+    hữu hạn, "vượt cả 20 lưới" sẽ đọc True ở p thật = 1/21 ≈ 4,8% — vượt âm
+    thầm mức α = 2,5% mà toàn nghiên cứu dựa vào. Lần chạy này có 69 lưới hữu
+    hạn nên điều kiện luôn đúng, nhưng cờ phải không thể nói dối ở một lần
+    chạy khác.
     """
     subset = {variant: VARIANTS[variant]}
     real = run_grid(bars_second, tier, min_bars=min_bars, stats=subset)
@@ -250,8 +269,8 @@ def confirm(bars_second: Bars, tier: str, offsets: np.ndarray, variant: str,
         "variant": variant, "real": value, "n": real[f"{variant}.n"],
         "percentile": percentile_of(value, col),
         "n_nulls": int(finite.size),
-        "beat_all_nulls": bool(finite.size > 0 and np.isfinite(value)
-                               and np.all(finite < value)),
+        "beat_all_nulls": bool(finite.size >= MIN_FINITE_NULLS_FOR_ALPHA
+                               and np.isfinite(value) and np.all(finite < value)),
     }
 
 

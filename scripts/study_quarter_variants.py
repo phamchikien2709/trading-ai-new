@@ -101,8 +101,22 @@ def main(argv=None) -> int:
     print(conf.to_string(index=False))
     print()
 
-    winner, verdict_md = verdict(track_a, track_b)
-    print(verdict_md)
+    # Spec 1b section 5 chot luat quyet dinh section 6 CHI cho tang chinh
+    # PRIMARY_TIER (q90). Tang session la mo ta, khong tuyen bo gi. In phan
+    # quyet section 6 cho mot tang khac se tao ra mot ket luan co tham quyen
+    # gia tren mot tang spec khong cho phep -> be mat p-hacking con song duy
+    # nhat cua thiet ke nay. Vi vay chi tinh/in/ghi verdict khi tier chinh xac
+    # bang PRIMARY_TIER; nguoc lai chi in bang mo ta va mot dong noi ro day
+    # KHONG phai kiem dinh da dang ky.
+    if args.tier == PRIMARY_TIER:
+        tail = verdict(track_a, track_b)[1]
+    else:
+        tail = ("\n## KHONG phai kiem dinh da dang ky\n\n"
+                f"Tang `{args.tier}` khac tang chinh `{PRIMARY_TIER}`. Luat "
+                "chot section 6 CHI ap dung cho tang chinh (spec 1b section "
+                "5). Ket qua o day CHI la mo ta, khong tuyen bo pass/fail, "
+                "khong duoc doc thanh phan quyet.")
+    print(tail)
 
     out_dir = args.out_dir or (ROOT / "results" / "quarter_variants"
                                / date.today().isoformat())
@@ -120,7 +134,7 @@ def main(argv=None) -> int:
             "", "```", screened.to_string(index=False), "```", "",
             "## Kiem dinh cuoi tren nua sau", "",
             "```", conf.to_string(index=False), "```", ""]
-    (out_dir / "summary.md").write_text("\n".join(head) + verdict_md + "\n",
+    (out_dir / "summary.md").write_text("\n".join(head) + tail + "\n",
                                         encoding="utf-8")
     print(f"\nket qua: {out_dir}")
     return 0
