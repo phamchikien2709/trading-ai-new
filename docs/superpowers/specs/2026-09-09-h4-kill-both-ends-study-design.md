@@ -112,7 +112,7 @@ Thêm hai cột suy ra ở cấp ngày:
 ### 3.3 Luật loại — ba luật
 
 1. **Loại cả ngày nếu bất kỳ slot nào thiếu hoặc có quá ít bar.** Ngưỡng theo **tỉ lệ**, không theo số tuyệt đối: slot 0 chỉ có 3 giờ nên một ngưỡng tuyệt đối chung sẽ hoặc loại oan slot 0 hoặc quá lỏng với năm slot kia. Luật: mỗi slot cần `n >= 0.6 * số bar kỳ vọng` với số bar kỳ vọng = `3h/bar_seconds` cho slot 0 và `4h/bar_seconds` cho slot 1–5. Trên M1 là 108 và 144 bar. Cần thiết vì dữ liệu thật cho **p05 của slot 0 = 1 bar** — có ngày lễ slot 0 gần như rỗng, và một cây H4 dựng từ một bar M1 có `high == low`, làm "kill hai đầu" thành vô nghĩa và làm phân vị excursion bùng nổ.
-2. **Loại hai ngày chuyển DST mỗi năm**, nhận diện bằng: khoảng cách lịch giữa `trading_day` này và ngày giao dịch kế tiếp không phải 24 giờ tuyệt đối. Ngày đó có một slot dài 3 hoặc 5 giờ nên range của nó không so được. ~18 ngày trên 2584.
+2. **Loại ngày chuyển DST**, nhận diện bằng: offset UTC→NY đổi giữa ngày. Đo được là luật này **không loại ngày nào** trên XAUUSDc — xem §11 mục 11; nó vẫn được giữ vì nó đúng và rẻ, và sẽ sống nếu nguồn có phiên khác. Ngày đó có một slot dài 3 hoặc 5 giờ nên range của nó không so được. ~18 ngày trên 2584.
 3. **Luật loại áp y nguyên cho lưới thật và mọi lưới null.** Áp một bên thì cỡ mẫu lệch và phép so vô nghĩa. Đây là bài học đã ghi trong docstring `aggregate_cycles`.
 
 Ba luật này được thi hành trong **một hàm duy nhất** mà cả đường thật và đường null gọi, để không thể lệch nhau.
@@ -315,10 +315,13 @@ Không phải danh sách đầy đủ; đây là những chỗ mà sai thì cả
 | | số dòng |
 |---|---|
 | ngày giao dịch có dữ liệu | 2.584 |
-| ngày đủ sáu slot | 2.385 |
-| dòng (ngày × slot) sau luật loại | ~14.300 |
-| mỗi slot | ~2.385 |
-| mỗi slot mỗi năm | ~250 |
+| ngày đủ sáu slot **có mặt** | 2.385 |
+| ngày **sống sót cả ba luật loại** | **2.303** |
+| dòng (ngày × slot) | **13.818** |
+| mỗi slot | ~2.303 |
+| mỗi slot mỗi năm | ~245 |
+
+Chênh 2.385 → 2.303 là **82 ngày** bị luật §3.3.1 loại (nửa phiên và ngày lễ có một slot dưới 60% bar kỳ vọng), đo được trên M1. Luật §3.3.2 loại **0 ngày** — xem §11 mục 11.
 
 Tỉ lệ thì thừa mẫu: sai số chuẩn của một tỉ lệ trên 2.385 quan sát là ~1 điểm phần trăm. Nhưng **p95 và max của ⑤/⑥ tách theo năm chỉ dựa trên ~250 quan sát**, và số đó còn nhỏ hơn nữa sau khi lọc "chỉ nhóm bị kill". Báo `n` thật ở mọi ô; không ước lượng trước.
 
@@ -353,4 +356,5 @@ Phần này tồn tại để ngăn cả tôi và người dùng hợp lý hoá 
 7. **Null yếu trên H1**: chỉ 24 mốc neo khả dụng (§5.1). Percentile tính trên 24 điểm thì thô; `n_nulls` được báo ra.
 8. **Một symbol, một khoảng thời gian.** Không có bằng chứng nào về việc kết quả chuyển sang symbol khác.
 9. **Đơn vị USD gộp cả mẫu bị 2025–2026 chi phối** (§2.3b). Chỉ dùng dạng chia `day_atr` hoặc dạng tách theo năm để quyết định bất cứ điều gì.
-10. **Dữ liệu XAUUSDc có 163 bar Thứ Bảy lạc** (2018–2021, đúng 19:00 hoặc 20:00 NY, khoảng một bar mỗi tuần). Thị trường không mở Thứ Bảy, nên đây là dị thường của feed. Hệ quả đã kiểm: chúng chia 22% khe cuối tuần thành 27h + 22h thay vì một khe 49h — nên **mọi phép đếm khe cuối tuần trên bộ dữ liệu này đều không đáng tin**, và đó là lý do thứ hai để cổng §6.1 dùng khe nghỉ hằng ngày. Với lưới H4, mỗi bar lạc sinh ra một "ngày giao dịch" Thứ Bảy chỉ có 1–2 bar ở slot 0, và luật loại §3.3.1 xoá nó tự động. Nhưng nó nằm **giữa** thứ Sáu và ngày giao dịch thật kế tiếp, nên định nghĩa "ngày kế tiếp" của cửa sổ ① slot 5 phải là **ngày giao dịch còn sống kế tiếp**, không phải ngày lịch kế tiếp — nếu không, 163 dòng slot 5 của thứ Sáu trong 2018–2021 sẽ bị xoá oan, và đó là một phép xoá thiên lệch theo thời gian.
+11. **Luật loại ngày chuyển DST (§3.3.2) không bao giờ kích hoạt trên bộ dữ liệu này.** Đo được: **0** ngày giao dịch có offset UTC→NY đổi giữa ngày. Lý do có cấu trúc, không phải may mắn: DST của Mỹ luôn chuyển lúc **02:00 Chủ nhật giờ NY**, mà lúc đó XAUUSD đang trong khe nghỉ cuối tuần (đóng 17:00 thứ Sáu, mở lại 18:00 Chủ nhật), nên **không ngày giao dịch nào từng bắc qua một lần chuyển DST** và không ngày nào dài 23 hay 25 giờ. Hệ quả: lý lẽ của §3.3.2 đúng về nguyên tắc nhưng vô hiệu về thực tế ở đây, và **DST không phải là confound của nghiên cứu này**. Luật vẫn được giữ: nó rẻ, test tổng hợp chứng minh nó chạy đúng khi thị trường CÓ mở qua mốc chuyển, và nó sẽ sống nếu nguồn dữ liệu đổi sang một broker có phiên Chủ nhật sáng.
+12. **Dữ liệu XAUUSDc có 163 bar Thứ Bảy lạc** (2018–2021, đúng 19:00 hoặc 20:00 NY, khoảng một bar mỗi tuần). Thị trường không mở Thứ Bảy, nên đây là dị thường của feed. Hệ quả đã kiểm: chúng chia 22% khe cuối tuần thành 27h + 22h thay vì một khe 49h — nên **mọi phép đếm khe cuối tuần trên bộ dữ liệu này đều không đáng tin**, và đó là lý do thứ hai để cổng §6.1 dùng khe nghỉ hằng ngày. Với lưới H4, mỗi bar lạc sinh ra một "ngày giao dịch" Thứ Bảy chỉ có 1–2 bar ở slot 0, và luật loại §3.3.1 xoá nó tự động. Nhưng nó nằm **giữa** thứ Sáu và ngày giao dịch thật kế tiếp, nên định nghĩa "ngày kế tiếp" của cửa sổ ① slot 5 phải là **ngày giao dịch còn sống kế tiếp**, không phải ngày lịch kế tiếp — nếu không, 163 dòng slot 5 của thứ Sáu trong 2018–2021 sẽ bị xoá oan, và đó là một phép xoá thiên lệch theo thời gian.

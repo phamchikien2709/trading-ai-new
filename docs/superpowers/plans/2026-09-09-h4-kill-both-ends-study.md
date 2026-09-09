@@ -458,7 +458,9 @@ Kiểm bằng tay trên dữ liệu thật (không phải test — chỉ xác nh
 ```bash
 python -c "import pandas as pd; from rsi_fvg.bars import Bars; from rsi_fvg.h4_grid import label_h4, aggregate_days; d=pd.read_parquet('data/XAUUSDc_M1.parquet'); b=Bars.from_dataframe(d); days=aggregate_days(b,label_h4(b.time),60); print('ngay con song:',len(days)); print(days[[f's{s}_n' for s in range(6)]].median().to_string())"
 ```
-Expected: `ngay con song: 2385`, median bar = 179 / 240 / 240 / 240 / 240 / 238. **Nếu hai con số này lệch, DỪNG và báo** — spec §2.2 dựa trên chúng.
+Expected: `ngay con song: 2303`, median bar = 179 / 240 / 240 / 240 / 240 / 238. **Nếu hai con số này lệch, DỪNG và báo.**
+
+Lưu ý 2303 chứ không phải 2385: spec §2.2 nói 2385 ngày **có mặt cả sáu slot**, còn đây là số ngày **sống sót cả ba luật loại** — luật 1 (mỗi slot ≥ 60% bar kỳ vọng) loại thêm 82 ngày nửa phiên và ngày lễ.
 
 - [ ] **Step 5: Commit**
 
