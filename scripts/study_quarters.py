@@ -52,7 +52,9 @@ def parse_args(argv=None):
 
 
 def load_bars(symbol: str, tf: str, data_dir: Path) -> Bars:
-    df = load_or_fetch(symbol, tf, data_dir)
+    """load_or_fetch tra ve (DataFrame, SymbolSpec). Nghien cuu nay khong dung
+    spec — khong co sizing, khong co cost — nen bo qua nua sau."""
+    df, _spec = load_or_fetch(symbol, tf, data_dir)
     return Bars.from_dataframe(df)
 
 
