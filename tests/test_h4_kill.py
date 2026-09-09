@@ -4,7 +4,7 @@ import pandas as pd
 from conftest import epoch_for_ny
 from rsi_fvg.bars import Bars
 from rsi_fvg.h4_grid import N_SLOTS, aggregate_days, label_h4
-from rsi_fvg.h4_kill import COLUMNS, scan_kills
+from rsi_fvg.h4_kill import COLUMNS, DTYPES, scan_kills
 
 NY_HOURS = (18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4,
             5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
@@ -173,10 +173,14 @@ def test_prefix_invariance_no_lookahead():
 
 def test_empty_result_keeps_full_column_set():
     """Ruling của controller: khi không ngày nào sống sót, `scan_kills` vẫn
-    phải trả về đủ bộ cột đã khai báo — nếu không, mọi hàm đo của Task 4/6
-    (dạng `rows[rows["slot"] == s]`) sẽ KeyError trên frame rỗng. Task 7 chạy
-    200 lưới null dịch offset và một offset bệnh lý có thể xoá hết ngày, nên
-    trường hợp rỗng này không phải giả thuyết suông."""
+    phải trả về đủ bộ cột đã khai báo, ĐÚNG DTYPE — nếu không, mọi hàm đo của
+    Task 4/6 (dạng `rows[rows["slot"] == s]` rồi `np.isfinite(...)`, hoặc lọc
+    `rows[~rows["crosses_weekend"]]`) sẽ vỡ trên frame rỗng: cột `object` khiến
+    `np.isfinite` ném `TypeError`, và lọc boolean trên cột `object` lặng lẽ trả
+    về frame KHÔNG CỘT NÀO thay vì 0 dòng đủ cột — đúng chỗ KeyError mà COLUMNS
+    được lập ra để chặn. Task 7 chạy 200 lưới null dịch offset và một offset
+    bệnh lý có thể xoá hết ngày, nên trường hợp rỗng này không phải giả thuyết
+    suông."""
     times = [epoch_for_ny(2026, 1, 5, 18), epoch_for_ny(2026, 1, 5, 19)]
     bars = Bars(time=np.asarray(times, dtype="int64"),
                 open=np.full(2, 2000.0), high=np.full(2, 2000.5),
@@ -188,8 +192,23 @@ def test_empty_result_keeps_full_column_set():
     empty = scan_kills(bars, lab, days, 3600)
     assert len(empty) == 0
     assert list(empty.columns) == list(COLUMNS)
+    assert empty.dtypes.astype(str).to_dict() == DTYPES
+
+    # Các pattern tiêu thụ thật sự mà Task 4-7 dùng, chạy trực tiếp trên frame
+    # rỗng (không lọc slot trước) -- đây chính là hai lỗi reviewer chỉ ra.
+    finite = np.isfinite(empty["rel_range"])          # object -> TypeError truoc fix
+    assert len(finite) == 0
+    filtered = empty[~empty["crosses_weekend"]]        # object -> mat het cot truoc fix
+    assert list(filtered.columns) == list(COLUMNS)
+    assert len(filtered) == 0
+    assert empty["k_up"].to_numpy(dtype=bool).shape == (0,)
+    assert empty["t_up"].to_numpy(dtype="float64").shape == (0,)
+    assert pd.isna(empty["w_hours"].median())
+    qcut = pd.qcut(empty["rel_range"], 2, labels=False, duplicates="drop")
+    assert len(qcut) == 0
 
     full = rows_for(build([("2026-01-05", CALM), ("2026-01-06", CALM),
                             ("2026-01-07", CALM), ("2026-01-08", CALM)]))
     assert len(full) > 0, "setup phai tao ra it nhat 1 dong song sot"
     assert list(full.columns) == list(COLUMNS)
+    assert full.dtypes.astype(str).to_dict() == DTYPES

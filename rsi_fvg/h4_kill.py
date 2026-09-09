@@ -27,11 +27,34 @@ MAX_GAP_DAYS = 4
 # sẽ KeyError. Task 7 chạy 200 lưới null dịch offset, và một offset bệnh lý có
 # thể xoá hết ngày — nên trường hợp rỗng này chắc chắn sẽ xảy ra, không phải
 # giả thuyết suông.
+#
+# Tên cột thôi CHƯA ĐỦ: `pd.DataFrame([], columns=COLUMNS)` cho đủ 22 cột nhưng
+# MỌI cột đều dtype `object` khi rỗng, khác hẳn dtype thật của nhánh có dữ liệu.
+# `np.isfinite()` trên cột `object` ném `TypeError`; lọc boolean kiểu
+# `rows[~rows["crosses_weekend"]]` trên cột `object` không ném lỗi mà lặng lẽ
+# trả về frame KHÔNG CỘT NÀO — tái diễn đúng KeyError mà COLUMNS được lập ra để
+# chặn, một bước xử lý sau đó. Nên dtype phải được khai báo cùng với tên cột,
+# và cả hai nhánh (rỗng/không rỗng) phải ép qua CÙNG một `DTYPES` để không thể
+# trôi lệch nhau — đây là điều khiến tuyên bố "hai đường code không thể trôi
+# lệch nhau" ở trên đúng thật (tên cột LẪN dtype), chứ không chỉ đúng cho tên.
 COLUMNS = (
     "day_num", "date", "year", "slot", "cand_high", "cand_low", "range_usd",
     "day_atr", "rel_range", "w_from", "w_to", "w_bars", "w_hours", "gap_days",
     "crosses_weekend", "h_avail", "t_up", "t_dn", "k_up", "k_dn", "exc_up", "exc_dn",
 )
+
+# int64: đếm được, không NaN. bool: cờ. float64: mang NaN được (t_up/t_dn/exc_up/
+# exc_dn khi không kill; rel_range/day_atr khi ATR chưa đủ dữ liệu khởi động).
+# datetime64[ns]: ngày lịch của `date`.
+DTYPES = {
+    "day_num": "int64", "date": "datetime64[ns]", "year": "int64", "slot": "int64",
+    "cand_high": "float64", "cand_low": "float64", "range_usd": "float64",
+    "day_atr": "float64", "rel_range": "float64",
+    "w_from": "int64", "w_to": "int64", "w_bars": "int64", "w_hours": "float64",
+    "gap_days": "int64", "crosses_weekend": "bool", "h_avail": "int64",
+    "t_up": "float64", "t_dn": "float64", "k_up": "bool", "k_dn": "bool",
+    "exc_up": "float64", "exc_dn": "float64",
+}
 
 
 def scan_kills(bars: Bars, labels: H4Labels, days: pd.DataFrame,
@@ -54,8 +77,8 @@ def scan_kills(bars: Bars, labels: H4Labels, days: pd.DataFrame,
     Dòng có cửa sổ ① đủ nhưng quét horizon bị cắt thì GIỮ, và `h_avail` ghi số
     bar thực có để đại lượng theo horizon tự lọc.
 
-    Trả về đủ bộ cột `COLUMNS` NGAY CẢ KHI không dòng nào sống sót (xem docstring
-    của `COLUMNS`).
+    Trả về đủ bộ cột `COLUMNS`, đúng dtype khai báo ở `DTYPES`, NGAY CẢ KHI
+    không dòng nào sống sót (xem docstring của `COLUMNS`/`DTYPES`).
     """
     n = len(bars)
     h_max = int(h_max_min * 60 // bar_seconds)
@@ -125,4 +148,7 @@ def scan_kills(bars: Bars, labels: H4Labels, days: pd.DataFrame,
                 "exc_dn": float(cl - win_lo.min()) if k_dn else float("nan"),
             }
             recs.append(rec)
-    return pd.DataFrame(recs, columns=list(COLUMNS))
+    # Một đường return DUY NHẤT cho cả hai nhánh (rỗng/không rỗng): ép dtype
+    # qua DTYPES vô điều kiện, nên tên cột LẪN dtype không thể trôi lệch giữa
+    # hai nhánh — xem ghi chú ở khai báo COLUMNS/DTYPES phía trên.
+    return pd.DataFrame(recs, columns=list(COLUMNS)).astype(DTYPES)
