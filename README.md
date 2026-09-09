@@ -15,6 +15,14 @@ Specs: `docs/superpowers/specs/`. Plans: `docs/superpowers/plans/`.
 
 **Kết quả chạy 2026-09-09 (661.200 bar M5, 2017-04 → 2026-09): tiền đề KHÔNG đứng.** Thống kê quyết định — sau khi Q2 sweep range Q1 rồi đóng lại bên trong, Q3 có đi ngược hướng sweep — ra **0,473** ở tầng session và **0,485** ở tầng 90 phút, tức **dưới mức tung đồng xu**, và nằm ở **percentile 3** của phân phối null. Theo luật chốt trước trong spec §7, Phase 2 (strategy) **không được phép** viết spec. Chi tiết và các phát hiện phụ: `results/quarters_study/2026-09-09/summary.md`, spec `docs/superpowers/specs/2026-09-09-quarterly-theory-premise-study-design.md`.
 
+### Phase 1b — năm biến thể
+
+    python scripts/study_quarter_variants.py --tf M5   # -> results/quarter_variants/<ngày>/
+
+Phase 1 đo **một** cách hình thức hoá ý tưởng sweep-reclaim và nó thất bại. Phase 1b đo năm cách khác, với kiểm soát đa kiểm định chặt hơn: số biến thể khoá ở 5 trước khi viết code, dữ liệu chia 50/50 theo thời gian (sàng trên nửa đầu và **không tuyên bố gì tại đó**, kiểm một lần trên nửa sau), hai đường độc lập nên chỉ còn 2 kiểm định cuối với Bonferroni α = 2,5%. Tầng chính là q90 vì nó ít bị confound mốc 18:00 hơn. Ở tầng đó có 69 lưới null nên α = 2,5% đòi giá trị thật **vượt cả 69 lưới**. Spec, luật chốt trước và giới hạn: `docs/superpowers/specs/2026-09-09-quarterly-theory-variants-study-design.md`.
+
+**Kết quả chạy 2026-09-09 (661.200 bar M5, chia 50/50: 330.600 bar mỗi nửa; tầng q90, 69 lưới null): KHÔNG đường nào pass.** Đường A (V1, pre-specified): real=0,5192, percentile 92,8/69 lưới, không vượt cả 69. Đường B (V5, thắng vòng sàng nửa đầu với percentile 58,0): real=0,4978, percentile 27,5/69 lưới, không vượt cả 69. Kết luận đúng luật chốt trước §6: **năm cách hình thức hoá này không đứng trên XAUUSDc M5** — không phải Quarterly Theory sai — và không có Phase 1c. Chi tiết: `results/quarter_variants/2026-09-09/summary.md`.
+
 ## Setup (Windows, Python 3.13)
 
     pip install -r requirements.txt
