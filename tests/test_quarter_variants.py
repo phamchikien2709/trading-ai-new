@@ -375,24 +375,98 @@ def test_verdict_text_says_quarterly_theory_is_closed_when_nothing_passes():
     assert "dong lai" in text and "Phase 1c" in text
 
 
-def test_screen_returns_four_variants_with_correct_columns():
-    """Test end-to-end screen() against real synthetic Bars.
+def _build_variant_bars(n_cycles: int = 30):
+    """Dung bar M5 THEO TUNG CHU KY de Q2 that su sweep va dong lai trong range.
 
-    Xay dung toi thieu 25 chu ky q90 (khoang 7 ngay, ~2000 M5 bar) de V2 co
-    du cua so truot 20 chu ky moi phan loai duoc. Dung time array ro rang.
-    Gia co bien dong de variant chon duoc chu ky thay cho loai het.
+    Fix round 1 dung `open = 100 + (i % 10)`: chu ky 10 chia het cua so 18 bar
+    cua quarter nen MOI quarter co high/low giong het nhau va `q2_high ==
+    q1_high` khong bao gio thoa so sanh chat `>` -> khong chu ky nao duoc
+    chon. Ham nay xay tung quarter co y, khong dung ham tuan hoan toan cuc bo:
+
+      Q1 (bar 0..17)  : dai hep, high/low CO DINH trong chu ky nay. Tu chu ky
+                        thu 20 tro di (TIGHT_FROM) range hep lai (0.5 thay vi
+                        1.0) de tao "qua khu" cho `trailing_tight` cua V2 so
+                        sanh - 20 chu ky dau (range rong) lam median truot, 10
+                        chu ky sau (range hep) deu hep hon median do.
+      Q2 (bar 18..35) : bar dau tien co high vuot han high Q1 (sweep len); 17
+                        bar con lai dong FLAT tai mot gia trong khoang (q1_low,
+                        trung diem Q1) - do la q2_close, tuc dong lai (reclaim)
+                        trong range Q1 va o duoi trung diem. Khong bar nao cham
+                        q1_low nen khong bao gio sweep ca hai phia.
+      Q3 (bar 36..53) : mo dau co dinh 100.1 (tren True Open 100.0 cua Q2 ->
+                        "premium", de V5 co du lieu), dong doi chieu (103.0
+                        hoac 97.0) theo tinh chan-le cua chu ky de q3_close !=
+                        q3_open (khong hoa) va xac suat do khong tam thuong la
+                        0.0 hay 1.0.
+      Q4 (bar 54..71) : dong doi chieu song song voi Q3 (gia tri khac) de V4
+                        (do q3_open doi q4_close) cung co du lieu; hinh dang
+                        khong quan trong voi cac bien the con lai.
+
+    Hoan toan tat dinh: khong dung random, ke ca co seed.
     """
-    n_bars = 2000
     base = epoch_for_ny(2026, 6, 1, 18)
+    o: list[float] = []
+    h: list[float] = []
+    l: list[float] = []
+    c: list[float] = []
 
-    # Tao gia voi mau lua chon (deterministik, khong dung randomness).
-    o = [(100.0 + (i % 10)) for i in range(n_bars)]
-    h = [(o_val + 2.0) for o_val in o]
-    l = [(o_val - 2.0) for o_val in o]
-    c = [(o_val + 1.0) for o_val in o]
+    TIGHT_FROM = 20
+    for cyc in range(n_cycles):
+        if cyc < TIGHT_FROM:
+            q1_high, q1_low = 100.5, 99.5      # range 1.0 - "qua khu" cho V2
+        else:
+            q1_high, q1_low = 100.25, 99.75    # range 0.5 - hep hon median qua khu
+
+        up = cyc % 2 == 0      # tinh chan-le quyet dinh huong Q3/Q4
+
+        # Q1: dai hep, high/low co dinh trong tung bar cua chu ky nay.
+        for _ in range(18):
+            o.append(100.0); h.append(q1_high); l.append(q1_low); c.append(100.0)
+
+        # Q2: bar dau sweep vuot high Q1; cac bar sau dong flat tai gia
+        # reclaim (duoi trung diem Q1, tren q1_low) - do la q2_close.
+        o.append(100.0); h.append(q1_high + 1.5); l.append(q1_low + 0.2)
+        c.append(q1_high + 1.0)
+        reclaim = q1_low + 0.05
+        for _ in range(17):
+            o.append(reclaim); h.append(reclaim); l.append(reclaim); c.append(reclaim)
+
+        # Q3: bar dau mo tai 100.1 (q3_open); bar cuoi dong tai q3_close doi
+        # chieu theo tinh chan-le.
+        q3_close = 103.0 if up else 97.0
+        for _ in range(17):
+            o.append(100.1); h.append(100.2); l.append(100.0); c.append(100.1)
+        o.append(100.1)
+        h.append(max(100.1, q3_close) + 0.1)
+        l.append(min(100.1, q3_close) - 0.1)
+        c.append(q3_close)
+
+        # Q4: song song voi Q3, gia tri khac (q4_close).
+        q4_close = 103.5 if up else 96.5
+        for _ in range(17):
+            o.append(100.1); h.append(100.2); l.append(100.0); c.append(100.1)
+        o.append(100.1)
+        h.append(max(100.1, q4_close) + 0.1)
+        l.append(min(100.1, q4_close) - 0.1)
+        c.append(q4_close)
 
     bars = make_bars(o, h, l, c)
-    bars.time = np.arange(base, base + 300 * n_bars, 300, dtype="int64")
+    bars.time = np.arange(base, base + 300 * len(c), 300, dtype="int64")
+    return bars
+
+
+def test_screen_returns_four_variants_with_correct_columns():
+    """Test end-to-end screen() tren bar tong hop theo tung chu ky.
+
+    30 chu ky q90 (2160 bar M5, xem `_build_variant_bars`): 20 chu ky dau Q1
+    rong (range 1.0), 10 chu ky sau (20..29) Q1 hep (range 0.5). Vi 20 chu ky
+    dau deu rong, median truot 20-chu-ky cua ca 10 chu ky sau van con neo o
+    1.0, nen ca 10 chu ky do deu hep hon median va duoc V2 giu lai -> V2 CO
+    du lieu that (n=10), khong phai truong hop duoc mien tru khoi assertion
+    n>0. Da xac nhan bang script chay thu (xem bao cao task-5, muc Fix round
+    2): n = {V2:10, V3:30, V4:30, V5:30}, real = 0.5 o ca bon dong.
+    """
+    bars = _build_variant_bars()
 
     # Tao offset nho de chay nhanh (5 offset, seed=1).
     offsets = make_offsets("q90", 300, 5, seed=1)
@@ -410,24 +484,27 @@ def test_screen_returns_four_variants_with_correct_columns():
     # Kiem tra: variant theo thu tu, neu f"{name}.p" sai thi raise KeyError.
     assert list(result["variant"]) == list(SCREEN_VARIANTS)
 
+    # Khong suy bien (day la phan fix round 1 thieu): MOI dong, ke ca V2,
+    # phai chon duoc chu ky (n > 0) va real phai huu han. Neu bar khong tao
+    # duoc sweep thi n = 0 va real = NaN cho tat ca, dung nhu fix round 1.
+    for _, row in result.iterrows():
+        assert row["n"] > 0, f"{row['variant']}: n=0, bar khong tao duoc sweep"
+        assert np.isfinite(row["real"]), f"{row['variant']}: real khong huu han"
+
+    # It nhat mot dong phai co percentile huu han (can luoi null cho gia tri
+    # so sanh duoc, khong chi la lua chon xep hang tren mot ket qua rong).
+    assert result["percentile"].apply(np.isfinite).any()
+
 
 def test_confirm_returns_dict_with_required_keys_and_bool_flag():
-    """Test end-to-end confirm() against real synthetic Bars.
+    """Test end-to-end confirm() tren cung bo bar tung-chu-ky cua screen().
 
-    Kiem tra confirm tra ve dict co dung 6 khoa va beat_all_nulls la bool
-    (khong phai numpy bool hay None), vi logic quyet dinh o task sau branch tren.
+    Kiem tra confirm tra ve dict co dung 6 khoa, beat_all_nulls la bool
+    (khong phai numpy bool hay None) vi logic quyet dinh o task sau branch
+    tren, VA ket qua khong suy bien (n > 0, real huu han) - phan fix round 1
+    thieu. Da xac nhan bang script chay thu: n=30, real=0.5.
     """
-    n_bars = 2000
-    base = epoch_for_ny(2026, 6, 1, 18)
-
-    # Tao gia voi mau lua chon (deterministik).
-    o = [(100.0 + (i % 10)) for i in range(n_bars)]
-    h = [(o_val + 2.0) for o_val in o]
-    l = [(o_val - 2.0) for o_val in o]
-    c = [(o_val + 1.0) for o_val in o]
-
-    bars = make_bars(o, h, l, c)
-    bars.time = np.arange(base, base + 300 * n_bars, 300, dtype="int64")
+    bars = _build_variant_bars()
 
     # Tao offset.
     offsets = make_offsets("q90", 300, 5, seed=1)
@@ -446,3 +523,7 @@ def test_confirm_returns_dict_with_required_keys_and_bool_flag():
     # Kiem tra: beat_all_nulls la bool that (khong phai numpy.bool_).
     assert isinstance(result["beat_all_nulls"], bool)
     assert not isinstance(result["beat_all_nulls"], np.bool_)
+
+    # Khong suy bien: phai co chu ky duoc chon va real phai huu han.
+    assert result["n"] > 0
+    assert np.isfinite(result["real"])
