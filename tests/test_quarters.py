@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from conftest import epoch_for_ny
-from rsi_fvg.quarters import NY_TZ, server_to_ny, verify_server_tz
+from rsi_fvg.quarters import NY_TZ, label_quarters, server_to_ny, verify_server_tz
 
 
 def _offset_hours(epoch: int, ny_wall: str) -> float:
@@ -101,3 +101,74 @@ def test_verify_server_tz_reports_no_gaps():
     chk = verify_server_tz(t, bar_seconds=300)
     assert not chk.ok
     assert any("khe" in n for n in chk.notes)
+
+
+@pytest.mark.parametrize("hh,mm,want_sess,want_q90", [
+    (18, 0, 0, 0), (19, 30, 0, 1), (21, 0, 0, 2), (23, 59, 0, 3),
+    (0, 0, 1, 0), (1, 30, 1, 1),
+    (6, 0, 2, 0), (7, 30, 2, 1),
+    (12, 0, 3, 0), (13, 30, 3, 1), (17, 59, 3, 3),
+])
+def test_label_quarters_boundary_table(hh, mm, want_sess, want_q90):
+    """Bảng này đã được kiểm tay khi làm indicator Pine — spec indicator §8."""
+    e = epoch_for_ny(2026, 6, 1, hh, mm)
+    t = np.array([e], dtype="int64")
+    assert label_quarters(t, "session").q_index[0] == want_sess
+    assert label_quarters(t, "q90").q_index[0] == want_q90
+
+
+def test_trading_day_spans_midnight():
+    """23:00 ngày D và 01:00 ngày D+1 thuộc CÙNG chu kỳ ngày (bắt đầu 18:00 D).
+
+    Chỗ dễ cài sai nhất: kiểm cả trading_day bằng nhau VÀ q_index khác nhau —
+    chỉ kiểm một trong hai sẽ không bắt được lỗi lệch ngày.
+    """
+    a = epoch_for_ny(2026, 6, 1, 23)
+    b = epoch_for_ny(2026, 6, 2, 1)
+    lab = label_quarters(np.array([a, b], dtype="int64"), "session")
+    assert lab.trading_day[0] == lab.trading_day[1] == pd.Timestamp("2026-06-01")
+    assert lab.q_index[0] == 0 and lab.q_index[1] == 1
+
+
+def test_trading_day_rolls_at_18():
+    """17:59 và 18:01 cùng ngày dương lịch nhưng thuộc HAI chu kỳ khác nhau."""
+    a = epoch_for_ny(2026, 6, 1, 17, 59)
+    b = epoch_for_ny(2026, 6, 1, 18, 1)
+    lab = label_quarters(np.array([a, b], dtype="int64"), "session")
+    assert lab.trading_day[0] == pd.Timestamp("2026-05-31")
+    assert lab.trading_day[1] == pd.Timestamp("2026-06-01")
+    assert lab.cycle_id[1] == lab.cycle_id[0] + 1
+
+
+def test_cycle_id_q90_is_finer_than_session():
+    """Tầng q90: mỗi session 6h là một chu kỳ, nên 4 chu kỳ mỗi ngày."""
+    base = epoch_for_ny(2026, 6, 1, 18)
+    t = np.array([base + h * 3600 for h in (0, 6, 12, 18)], dtype="int64")
+    lab_s = label_quarters(t, "session")
+    lab_q = label_quarters(t, "q90")
+    assert len(set(lab_s.cycle_id)) == 1          # cùng một ngày giao dịch
+    assert len(set(lab_q.cycle_id)) == 4          # bốn session khác nhau
+    assert list(lab_q.q_index) == [0, 0, 0, 0]    # đều là block đầu của session
+
+
+def test_anchor_offset_shifts_grid_by_exactly_one_quarter():
+    """Dịch neo đúng 5400 s phải làm nhãn q90 lùi đúng một bậc."""
+    base = epoch_for_ny(2026, 6, 1, 18)
+    t = np.arange(base, base + 6 * 3600, 300, dtype="int64")
+    a = label_quarters(t, "q90", anchor_offset=0).q_index
+    b = label_quarters(t, "q90", anchor_offset=5400).q_index
+    assert list(b) == list((a - 1) % 4)
+
+
+def test_label_quarters_rejects_unknown_tier():
+    t = np.array([epoch_for_ny(2026, 6, 1, 18)], dtype="int64")
+    with pytest.raises(ValueError, match="tier"):
+        label_quarters(t, "micro")
+
+
+def test_label_quarters_correct_inside_dst_mismatch_window():
+    """10/03/2026 nằm trong cửa sổ offset 6 giờ. Nhãn vẫn phải theo giờ NY."""
+    e = epoch_for_ny(2026, 3, 10, 19, 30)
+    lab = label_quarters(np.array([e], dtype="int64"), "q90")
+    assert lab.q_index[0] == 1
+    assert lab.ny[0].hour == 19 and lab.ny[0].minute == 30

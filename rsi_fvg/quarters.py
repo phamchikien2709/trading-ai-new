@@ -116,3 +116,61 @@ def verify_server_tz(time: np.ndarray, bar_seconds: int) -> TzCheck:
         notes.append(f"ket khe hang ngay mode={d_mode!r}, ngoai cua so {DAILY_GAP_END_OK}")
     return TzCheck(w_mode, w_counts, d_mode, d_counts,
                    weekly_ok, daily_ok, weekly_ok and daily_ok, tuple(notes))
+
+
+TIERS: dict[str, int] = {"session": 21600, "q90": 5400}
+NS_PER_DAY = 24 * 3600 * 1_000_000_000
+
+
+@dataclass(frozen=True)
+class QuarterLabels:
+    ny: pd.DatetimeIndex           # tz-aware, giờ New York
+    trading_day: pd.DatetimeIndex  # naive, nửa đêm NY của ngày mở 18:00
+    i_sess: np.ndarray             # 0..3 — Asia / London / NY-AM / NY-PM
+    i_q90: np.ndarray              # 0..3 — block 90 phút trong session
+    cycle_id: np.ndarray           # int64, một giá trị mỗi chu kỳ của tier
+    q_index: np.ndarray            # int64 0..3 — quarter của tier (Q1 lý thuyết = 0)
+
+
+def label_quarters(time: np.ndarray, tier: str,
+                   anchor_offset: int = 0) -> QuarterLabels:
+    """Gán nhãn quarter theo giờ New York. Cùng số học với indicator Pine.
+
+    Xem pine/quarterly_theory_ict.pine: hShift = (hour + 6) % 24 dịch 18:00 NY về 0,
+    nên chu kỳ ngày chạy 18:00 -> 18:00.
+
+    `anchor_offset` (giây) dịch cả lưới và tồn tại CHỈ để mô hình null dùng
+    (spec §4.1). Đây là lý do hàm nhận tham số thay vì hardcode mốc neo.
+
+    `trading_day` tính bằng số học LỊCH trên giờ treo tường naive, không bằng số
+    giây tích luỹ: trừ một ngày trên timestamp tz-aware là trừ 24 giờ tuyệt đối,
+    và qua biên DST của New York điều đó cho ra 23:00 hoặc 01:00 thay vì nửa đêm.
+    """
+    if tier not in TIERS:
+        raise ValueError(f"tier phai la mot trong {sorted(TIERS)}, nhan {tier!r}")
+
+    ny = server_to_ny(time)
+    if anchor_offset:
+        ny = ny - pd.Timedelta(seconds=int(anchor_offset))
+
+    naive = ny.tz_localize(None)
+    hour = naive.hour.to_numpy()
+    h_shift = (hour + 6) % 24
+    i_sess = (h_shift // 6).astype("int64")
+    sec_in_sess = ((h_shift % 6) * 3600
+                   + naive.minute.to_numpy() * 60
+                   + naive.second.to_numpy())
+    i_q90 = (sec_in_sess // 5400).astype("int64")
+
+    back_a_day = pd.to_timedelta((hour < 18).astype("int64"), unit="D")
+    trading_day = naive.normalize() - back_a_day
+    day_num = (trading_day.asi8 // NS_PER_DAY).astype("int64")
+
+    if tier == "session":
+        cycle_id, q_index = day_num, i_sess
+    else:
+        cycle_id, q_index = day_num * 4 + i_sess, i_q90
+
+    return QuarterLabels(ny=ny, trading_day=trading_day, i_sess=i_sess,
+                         i_q90=i_q90, cycle_id=cycle_id.astype("int64"),
+                         q_index=q_index.astype("int64"))
