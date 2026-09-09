@@ -2,8 +2,9 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rsi_fvg.quarter_variants import (base_trigger, pooled, q3_dir, variant_v1,
-                                      variant_v3, variant_v4, variant_v5)
+from rsi_fvg.quarter_variants import (TRAILING_WINDOW, base_trigger, pooled, q3_dir,
+                                      trailing_tight, variant_v1, variant_v2, variant_v3,
+                                      variant_v4, variant_v5)
 
 _RANGE = {"q1_high": 110.0, "q1_low": 90.0}
 _SWEEP_UP = _RANGE | {"q2_high": 115.0, "q2_low": 95.0, "q2_close": 105.0}
@@ -190,7 +191,73 @@ def test_v5_drops_price_exactly_at_the_true_open():
     assert variant_v5(w)["n"] == 0.0
 
 
-@pytest.mark.parametrize("fn", [variant_v1, variant_v3, variant_v4, variant_v5])
+def test_v3_down_side_genuine_single_sweep_above_midpoint():
+    """V3 down-side: single-sweep down voi q2_close tren trung diem cua q1_range.
+
+    So voi test_v3_requires_close_past_the_midpoint (up-side) nhung day la
+    down-side sweep: Q1 [90, 110], trung diem 100; Q2 scan xuong (q2_low 85 <
+    q1_low 90) va dong tren trung diem (q2_close > 100), Q3 tang (95 -> 100).
+    Expect n_dn = 1, co tac dong tien thuan (100 > 95).
+    """
+    w = _wide([_RANGE | {"q2_high": 105, "q2_low": 85, "q2_close": 105,
+                         "q3_open": 95, "q3_close": 100}])
+    got = variant_v3(w)
+    assert got["n"] == 1.0 and got["n_dn"] == 1.0
+    assert got["p"] == 1.0
+
+
+def test_trailing_tight_uses_only_prior_cycles():
+    """Test nay duoc thiet ke rieng de bat viec THIEU shift(1).
+
+    window=2 va bo so [10, 2, 4] la co y: median rat ben nen phan lon du lieu
+    test se KHONG phan biet duoc hai cai dat. O day chung khac nhau ro:
+      co shift(1)   : median(idx0, idx1) = median(10, 2) = 6 -> 4 < 6  -> True
+      thieu shift(1): median(idx1, idx2) = median(2, 4)  = 3 -> 4 < 3  -> False
+    """
+    r1 = pd.Series([10.0, 2.0, 4.0])
+    assert list(trailing_tight(r1, 2)) == [False, False, True]
+    naive = (r1 < r1.rolling(2).median()).to_numpy()      # ban thieu shift(1)
+    assert list(naive) == [False, True, False]
+
+
+def test_trailing_tight_drops_cycles_without_a_full_window():
+    """Chua du `window` chu ky truoc do -> median NaN -> loai."""
+    r1 = pd.Series([5.0, 5.0, 5.0, 1.0])
+    got = trailing_tight(r1, 3)
+    assert list(got[:3]) == [False, False, False]
+    assert got[3]
+
+
+def test_trailing_tight_treats_equality_as_a_tie():
+    """`<` chat: bang dung median la hoa nen loai (spec 1b §2)."""
+    r1 = pd.Series([4.0, 4.0, 4.0])
+    assert not trailing_tight(r1, 2)[2]
+
+
+def test_v2_only_counts_cycles_with_a_tight_q1():
+    """Q1 range: 20 chu ky dau la 20, chu ky cuoi la 2 -> chi chu ky cuoi tinh."""
+    rows = []
+    for _ in range(TRAILING_WINDOW):
+        rows.append(_SWEEP_UP | {"q1_high": 110.0, "q1_low": 90.0,
+                                 "q3_open": 105.0, "q3_close": 100.0})
+    rows.append(_SWEEP_UP | {"q1_high": 101.0, "q1_low": 99.0,
+                             "q2_high": 115.0, "q2_low": 99.5, "q2_close": 100.0,
+                             "q3_open": 100.0, "q3_close": 95.0})
+    got = variant_v2(_wide(rows))
+    assert got["n"] == 1.0
+    assert got["p"] == 1.0
+
+
+def test_v2_uses_the_module_window():
+    assert TRAILING_WINDOW == 20
+
+
+def test_v2_on_empty_table_returns_nan():
+    got = variant_v2(_wide([]))
+    assert got["n"] == 0.0 and np.isnan(got["p"])
+
+
+@pytest.mark.parametrize("fn", [variant_v1, variant_v2, variant_v3, variant_v4, variant_v5])
 def test_variants_on_empty_table_return_nan(fn):
     got = fn(_wide([]))
     assert got["n"] == 0.0 and np.isnan(got["p"])

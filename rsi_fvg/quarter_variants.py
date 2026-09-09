@@ -74,6 +74,45 @@ def pooled(up: np.ndarray, dn: np.ndarray, direction: np.ndarray,
             "n_up": float(u.sum()), "n_dn": float(d.sum())}
 
 
+TRAILING_WINDOW = 20
+
+
+def trailing_tight(r1: pd.Series, window: int) -> np.ndarray:
+    """`range(Q1)` nhỏ hơn median TRƯỢT của `window` chu kỳ TRƯỚC ĐÓ.
+
+    `shift(1)` là thứ chặn lookahead, và nó là dòng quan trọng nhất của hàm
+    này: thiếu nó thì chu kỳ hiện tại tham gia vào median của chính nó, tức
+    điều kiện "Q1 hẹp" được quyết bằng thông tin của chính chu kỳ đang xét.
+
+    Chu kỳ chưa đủ `window` chu kỳ trước đó cho median NaN; `NaN` so sánh ra
+    False nên chúng bị loại — đúng ý.
+
+    So sánh `<` chặt: bằng đúng median là hoà nên loại.
+
+    Yêu cầu: `r1` theo thứ tự thời gian. `aggregate_cycles` groupby với
+    `sort=True` nên index đã sắp theo `cycle_id`, tức đã theo thời gian.
+    """
+    med = r1.shift(1).rolling(window).median()
+    return (r1 < med).to_numpy()
+
+
+def variant_v2(w: pd.DataFrame) -> dict[str, float]:
+    """V2 — chỉ tính chu kỳ có Q1 hẹp so với quá khứ gần.
+
+    Lý do: chính phát biểu ④ của lý thuyết — "Q1 dictates the quarters which
+    follow", Q1 hẹp báo Q2 giãn, nên cú manipulation ở Q2 "thật" hơn.
+
+    Đáng lưu ý: Phase 1 đo ④ và thấy tương quan range Q1 với range Q2 là
+    DƯƠNG (+0,71..+0,77), tức ngược hẳn điều lý thuyết đòi. V2 vẫn được thử vì
+    ④ đo tương quan tuyến tính đơn điệu trên toàn bộ chu kỳ, còn V2 hỏi một
+    câu khác và hẹp hơn: trong tập con Q1 hẹp, tín hiệu sweep có tốt hơn không.
+    """
+    r1 = w["q1_high"] - w["q1_low"]
+    tight = trailing_tight(r1, TRAILING_WINDOW)
+    up, dn = base_trigger(w)
+    return pooled(up & tight, dn & tight, q3_dir(w), against=True)
+
+
 def variant_v1(w: pd.DataFrame) -> dict[str, float]:
     """V1 — Q3 đi CÙNG hướng sweep, tức đảo thesis của ⑥.
 
