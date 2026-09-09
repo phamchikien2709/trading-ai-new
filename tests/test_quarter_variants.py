@@ -257,7 +257,7 @@ def test_v2_on_empty_table_returns_nan():
     assert got["n"] == 0.0 and np.isnan(got["p"])
 
 
-@pytest.mark.parametrize("fn", [variant_v1, variant_v2, variant_v3, variant_v4, variant_v5])
+@pytest.mark.parametrize("fn", [variant_v1, variant_v3, variant_v4, variant_v5])
 def test_variants_on_empty_table_return_nan(fn):
     got = fn(_wide([]))
     assert got["n"] == 0.0 and np.isnan(got["p"])
