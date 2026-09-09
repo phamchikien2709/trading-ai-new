@@ -2,9 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from rsi_fvg.quarter_variants import (TRAILING_WINDOW, base_trigger, pooled, q3_dir,
+from conftest import epoch_for_ny, make_bars
+from rsi_fvg.quarter_variants import (DIRECT_VARIANT, PRIMARY_TIER, SCREEN_VARIANTS,
+                                      TRAILING_WINDOW, VARIANTS, base_trigger, confirm,
+                                      pick_winner, pooled, q3_dir, screen, split_halves,
                                       trailing_tight, variant_v1, variant_v2, variant_v3,
-                                      variant_v4, variant_v5)
+                                      variant_v4, variant_v5, verdict)
 
 _RANGE = {"q1_high": 110.0, "q1_low": 90.0}
 _SWEEP_UP = _RANGE | {"q2_high": 115.0, "q2_low": 95.0, "q2_close": 105.0}
@@ -261,3 +264,111 @@ def test_v2_on_empty_table_returns_nan():
 def test_variants_on_empty_table_return_nan(fn):
     got = fn(_wide([]))
     assert got["n"] == 0.0 and np.isnan(got["p"])
+
+
+def test_registry_holds_all_five_and_splits_the_two_tracks():
+    assert set(VARIANTS) == {"V1", "V2", "V3", "V4", "V5"}
+    assert DIRECT_VARIANT == "V1"
+    assert SCREEN_VARIANTS == ("V2", "V3", "V4", "V5")
+    assert DIRECT_VARIANT not in SCREEN_VARIANTS      # V1 KHONG qua vong sang
+    assert PRIMARY_TIER == "q90"
+
+
+def test_split_halves_puts_the_odd_bar_in_the_second_half():
+    base = epoch_for_ny(2026, 6, 1, 18)
+    n = 7
+    bars = make_bars([1.0] * n, [1.0] * n, [1.0] * n, [1.0] * n)
+    bars.time = np.arange(base, base + 300 * n, 300, dtype="int64")
+    first, second = split_halves(bars)
+    assert len(first) == 3 and len(second) == 4
+    assert first.time[-1] < second.time[0]
+
+
+def test_split_halves_covers_every_bar_exactly_once():
+    base = epoch_for_ny(2026, 6, 1, 18)
+    n = 10
+    bars = make_bars([1.0] * n, [1.0] * n, [1.0] * n, [1.0] * n)
+    bars.time = np.arange(base, base + 300 * n, 300, dtype="int64")
+    first, second = split_halves(bars)
+    assert list(np.concatenate([first.time, second.time])) == list(bars.time)
+
+
+def test_pick_winner_takes_the_highest_percentile():
+    d = pd.DataFrame([
+        {"variant": "V2", "real": 0.5, "n": 100.0, "percentile": 40.0},
+        {"variant": "V3", "real": 0.6, "n": 100.0, "percentile": 90.0},
+        {"variant": "V4", "real": 0.5, "n": 100.0, "percentile": 70.0},
+        {"variant": "V5", "real": 0.5, "n": 100.0, "percentile": 10.0},
+    ])
+    assert pick_winner(d) == "V3"
+
+
+def test_pick_winner_breaks_a_percentile_tie_by_larger_n():
+    d = pd.DataFrame([
+        {"variant": "V2", "real": 0.5, "n": 100.0, "percentile": 90.0},
+        {"variant": "V3", "real": 0.5, "n": 500.0, "percentile": 90.0},
+        {"variant": "V4", "real": 0.5, "n": 100.0, "percentile": 10.0},
+        {"variant": "V5", "real": 0.5, "n": 100.0, "percentile": 10.0},
+    ])
+    assert pick_winner(d) == "V3"
+
+
+def test_pick_winner_falls_back_to_the_declared_order():
+    """Luat tie-break chot trong spec de khong phai quyet sau khi thay so."""
+    d = pd.DataFrame([
+        {"variant": "V5", "real": 0.5, "n": 100.0, "percentile": 90.0},
+        {"variant": "V3", "real": 0.5, "n": 100.0, "percentile": 90.0},
+        {"variant": "V2", "real": 0.5, "n": 100.0, "percentile": 90.0},
+        {"variant": "V4", "real": 0.5, "n": 100.0, "percentile": 90.0},
+    ])
+    assert pick_winner(d) == "V2"
+
+
+def test_pick_winner_ignores_nan_percentiles():
+    d = pd.DataFrame([
+        {"variant": "V2", "real": np.nan, "n": 0.0, "percentile": np.nan},
+        {"variant": "V3", "real": 0.5, "n": 10.0, "percentile": 20.0},
+        {"variant": "V4", "real": np.nan, "n": 0.0, "percentile": np.nan},
+        {"variant": "V5", "real": np.nan, "n": 0.0, "percentile": np.nan},
+    ])
+    assert pick_winner(d) == "V3"
+
+
+def test_verdict_requires_beating_every_null_not_percentile_95():
+    """Nguong la 'vuot CA moi luoi null' (spec 1b §5). percentile 96 tren 69
+    luoi null KHONG du: no nghia la con 2 luoi null vuot gia tri that."""
+    a = {"variant": "V1", "real": 0.55, "percentile": 96.0, "n": 100.0,
+         "n_nulls": 69, "beat_all_nulls": False}
+    b = {"variant": "V3", "real": 0.52, "percentile": 80.0, "n": 100.0,
+         "n_nulls": 69, "beat_all_nulls": False}
+    winner, text = verdict(a, b)
+    assert winner is None
+    assert "KHONG duong nao pass" in text
+
+
+def test_verdict_passes_the_track_that_beat_every_null():
+    a = {"variant": "V1", "real": 0.55, "percentile": 100.0, "n": 100.0,
+         "n_nulls": 69, "beat_all_nulls": True}
+    b = {"variant": "V3", "real": 0.52, "percentile": 80.0, "n": 100.0,
+         "n_nulls": 69, "beat_all_nulls": False}
+    winner, _ = verdict(a, b)
+    assert winner == "A"
+
+
+def test_verdict_prefers_track_b_when_both_pass_and_tie():
+    """Duong B la phat hien, duong A chi la kiem do on dinh (spec 1b §6, §7)."""
+    a = {"variant": "V1", "real": 0.55, "percentile": 100.0, "n": 100.0,
+         "n_nulls": 69, "beat_all_nulls": True}
+    b = {"variant": "V3", "real": 0.60, "percentile": 100.0, "n": 100.0,
+         "n_nulls": 69, "beat_all_nulls": True}
+    winner, _ = verdict(a, b)
+    assert winner == "B"
+
+
+def test_verdict_text_says_quarterly_theory_is_closed_when_nothing_passes():
+    a = {"variant": "V1", "real": 0.5, "percentile": 50.0, "n": 10.0,
+         "n_nulls": 69, "beat_all_nulls": False}
+    b = {"variant": "V3", "real": 0.5, "percentile": 50.0, "n": 10.0,
+         "n_nulls": 69, "beat_all_nulls": False}
+    _, text = verdict(a, b)
+    assert "dong lai" in text and "Phase 1c" in text

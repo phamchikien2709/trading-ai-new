@@ -15,7 +15,9 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from .quarter_stats import MIN_BARS_PER_QUARTER
+from .bars import Bars
+from .quarter_stats import (MIN_BARS_PER_QUARTER, percentile_of, run_grid,
+                            run_null)
 
 
 def _mean_or_nan(x: np.ndarray) -> float:
@@ -167,3 +169,135 @@ def variant_v5(w: pd.DataFrame) -> dict[str, float]:
     up, dn = base_trigger(w)
     side = np.sign(w["q3_open"].to_numpy() - w["q2_open"].to_numpy())
     return pooled(up & (side > 0), dn & (side < 0), q3_dir(w), against=True)
+
+
+VARIANTS = {
+    "V1": variant_v1, "V2": variant_v2, "V3": variant_v3,
+    "V4": variant_v4, "V5": variant_v5,
+}
+
+# Đường A: V1 KHÔNG qua vòng sàng — nó đã được định trước nên sàng nó là vô
+# nghĩa (spec 1b §4). Đường B: bốn biến thể còn lại.
+DIRECT_VARIANT = "V1"
+SCREEN_VARIANTS = ("V2", "V3", "V4", "V5")
+
+# Tie-break chốt trong spec §4 để không phải quyết sau khi thấy số.
+TIE_BREAK = SCREEN_VARIANTS
+
+# Tầng chính: q90 ít bị confound mốc 18:00 hơn (Phase 1 §8.2). Tầng session
+# chỉ báo mô tả, không tuyên bố gì, không tính vào số kiểm định.
+PRIMARY_TIER = "q90"
+
+
+def split_halves(bars: Bars) -> tuple[Bars, Bars]:
+    """Chia mảng bar làm hai tại `len//2`; bar dư thuộc NỬA SAU (spec 1b §3).
+
+    Toàn bộ pipeline chạy độc lập trên từng nửa. Chu kỳ vắt qua điểm chia sẽ
+    thiếu bar ở nửa nào cũng vậy và bị luật `min_bars` loại tự nhiên — không
+    cần xử lý riêng.
+    """
+    n = len(bars)
+    mid = n // 2
+    return bars.slice(0, mid), bars.slice(mid, n)
+
+
+def screen(bars_first: Bars, tier: str, offsets: np.ndarray,
+           min_bars: int = MIN_BARS_PER_QUARTER) -> pd.DataFrame:
+    """Xếp hạng V2–V5 trên nửa đầu.
+
+    KHÔNG TUYÊN BỐ GÌ TẠI ĐÂY. Percentile trả về chỉ để xếp hạng; nó không
+    phải bằng chứng và không được đọc thành "biến thể này pass" (spec 1b §4).
+    """
+    subset = {k: VARIANTS[k] for k in SCREEN_VARIANTS}
+    real = run_grid(bars_first, tier, min_bars=min_bars, stats=subset)
+    nulls = run_null(bars_first, tier, offsets, min_bars=min_bars, stats=subset)
+    rows = []
+    for name in SCREEN_VARIANTS:
+        key = f"{name}.p"
+        rows.append({"variant": name, "real": real[key], "n": real[f"{name}.n"],
+                     "percentile": percentile_of(real[key], nulls[key].to_numpy())})
+    return pd.DataFrame(rows)
+
+
+def pick_winner(screened: pd.DataFrame) -> str:
+    """Percentile cao nhất → `n` lớn hơn → thứ tự `TIE_BREAK` (spec 1b §4).
+
+    NaN percentile xuống cuối: một biến thể loại hết chu kỳ không được thắng.
+    """
+    d = screened.copy()
+    d["_order"] = [TIE_BREAK.index(v) for v in d["variant"]]
+    d = d.sort_values(["percentile", "n", "_order"],
+                      ascending=[False, False, True], na_position="last")
+    return str(d.iloc[0]["variant"])
+
+
+def confirm(bars_second: Bars, tier: str, offsets: np.ndarray, variant: str,
+            min_bars: int = MIN_BARS_PER_QUARTER) -> dict:
+    """Kiểm định cuối của ĐÚNG MỘT biến thể trên nửa sau.
+
+    `beat_all_nulls` là cờ quyết định, không phải `percentile`. Spec 1b §5:
+    tầng q90 có 69 lưới null nên α ≤ 2,5% đòi k = 0, tức giá trị thật phải
+    vượt CẢ 69 lưới. Dùng `percentile > 95` sẽ nới ngưỡng một cách âm thầm —
+    percentile 96 trên 69 lưới vẫn còn 2 lưới null vượt giá trị thật.
+    """
+    subset = {variant: VARIANTS[variant]}
+    real = run_grid(bars_second, tier, min_bars=min_bars, stats=subset)
+    nulls = run_null(bars_second, tier, offsets, min_bars=min_bars, stats=subset)
+    value = real[f"{variant}.p"]
+    col = nulls[f"{variant}.p"].to_numpy(dtype="float64")
+    finite = col[np.isfinite(col)]
+    return {
+        "variant": variant, "real": value, "n": real[f"{variant}.n"],
+        "percentile": percentile_of(value, col),
+        "n_nulls": int(finite.size),
+        "beat_all_nulls": bool(finite.size > 0 and np.isfinite(value)
+                               and np.all(finite < value)),
+    }
+
+
+def verdict(track_a: dict, track_b: dict) -> tuple[str | None, str]:
+    """Luật §6 của spec 1b, tính bằng máy — không để người đọc tự kết luận.
+
+    Trả về `(tên đường thắng, văn bản)`. `None` nghĩa là không đường nào pass,
+    và khi đó Quarterly Theory ĐÓNG LẠI với repo này: không có Phase 1c.
+    """
+    lines = ["## Phan quyet spec 1b section 6", ""]
+    for name, t in (("A", track_a), ("B", track_b)):
+        lines.append(
+            f"- duong **{name}** ({t['variant']}): real={t['real']:.4f}, "
+            f"percentile={t['percentile']:.1f}, n={t['n']:.0f}, "
+            f"nulls={t['n_nulls']} -> "
+            f"{'VUOT CA MOI LUOI NULL' if t['beat_all_nulls'] else 'khong vuot'}")
+
+    a_ok, b_ok = bool(track_a["beat_all_nulls"]), bool(track_b["beat_all_nulls"])
+    if a_ok and b_ok:
+        # Đồng percentile thì ưu tiên đường B: nó là phát hiện, còn đường A chỉ
+        # là kiểm độ ổn định của một con số đã biết (spec 1b §6, §7).
+        winner = "A" if track_a["percentile"] > track_b["percentile"] else "B"
+    elif a_ok:
+        winner = "A"
+    elif b_ok:
+        winner = "B"
+    else:
+        winner = None
+
+    lines.append("")
+    if winner is None:
+        lines.append(
+            "**KHONG duong nao pass. Quarterly Theory dong lai voi repo nay.** "
+            "Day la ket luan, khong phai mot vong thu nua: khong co Phase 1c "
+            "(spec 1b section 6).")
+    elif winner == "A":
+        lines.append(
+            f"**Duong A pass** ({track_a['variant']}). Cau duoc phep noi la "
+            "'chieu continuation on dinh qua hai nua lich su'. Cau KHONG duoc "
+            "phep noi la 'da tim ra mot edge' — xem spec 1b section 7.")
+    else:
+        lines.append(
+            f"**Duong B pass** ({track_b['variant']}). Phase 2 duoc phep viet "
+            "spec cho bien the nay.")
+    lines += ["", (
+        "Pass VAN KHONG nghia la co lai. Nghien cuu nay khong tinh cost; spread "
+        "XAUUSDc trong config/default.yaml la 260 points = 0,26 USD "
+        "(spec 1b section 6).")]
+    return winner, "\n".join(lines)
