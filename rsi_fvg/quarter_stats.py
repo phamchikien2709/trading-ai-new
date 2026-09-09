@@ -94,3 +94,38 @@ def stat_displacement_by_index(w: pd.DataFrame) -> dict[str, float]:
                             if mean_all and np.isfinite(mean_all) else float("nan"))
     out["n"] = float(len(w))
     return out
+
+
+def stat_q1_predicts_q2(w: pd.DataFrame) -> dict[str, float]:
+    """④ Spearman(range Q1, range Q2). Lý thuyết dự đoán ÂM.
+
+    "Q1 dictates the quarters which follow": Q1 hẹp báo Q2 giãn, Q1 đã giãn báo
+    Q2 co. Dùng Spearman chứ không Pearson vì range có đuôi dày và ta chỉ quan
+    tâm quan hệ đơn điệu. `pandas.Series.corr` có sẵn method này, không cần scipy.
+    """
+    if len(w) < 2:
+        return {"spearman_r1_r2": float("nan"), "n": float(len(w))}
+    r1 = w["q1_high"] - w["q1_low"]
+    r2 = w["q2_high"] - w["q2_low"]
+    rho = r1.corr(r2, method="spearman")
+    return {"spearman_r1_r2": float(rho), "n": float(len(w))}
+
+
+def stat_true_open(w: pd.DataFrame) -> dict[str, float]:
+    """⑤ True Open = open của bar đầu Q2 (spec §2.4 của spec indicator).
+
+    Đo P(cuối chu kỳ cùng phía True Open với lúc bắt đầu Q3). Trên 0.5 là dấu
+    hiệu bền hướng, dưới 0.5 là hồi quy về trung bình — lệch khỏi 0.5 theo hướng
+    nào cũng là thông tin.
+
+    Hoà (giá bằng đúng True Open) bị LOẠI, không gán về một phía (spec §4.2).
+    np.sign(0) là 0 nên nếu không loại thì hoà sẽ rơi vào nhánh "khác phía" một
+    cách tuỳ ý.
+    """
+    to = w["q2_open"].to_numpy()
+    a = w["q3_open"].to_numpy() - to
+    b = w["q4_close"].to_numpy() - to
+    keep = (a != 0) & (b != 0)
+    same = np.sign(a[keep]) == np.sign(b[keep])
+    return {"true_open_persistence": _mean_or_nan(same),
+            "n": float(keep.sum()), "ties": float((~keep).sum())}

@@ -4,8 +4,8 @@ import pytest
 
 from conftest import epoch_for_ny, make_bars
 from rsi_fvg.quarter_stats import (MIN_BARS_PER_QUARTER, aggregate_cycles,
-                                   stat_displacement_by_index, stat_range_by_index,
-                                   stat_sweep)
+                                   stat_displacement_by_index, stat_q1_predicts_q2,
+                                   stat_range_by_index, stat_sweep, stat_true_open)
 from rsi_fvg.quarters import label_quarters
 
 
@@ -131,3 +131,54 @@ def test_stats_on_empty_table_return_nan_not_crash():
     assert np.isnan(stat_sweep(w)["sweep_rate"])
     assert np.isnan(stat_range_by_index(w)["range_q1"])
     assert np.isnan(stat_displacement_by_index(w)["disp_q1"])
+
+
+def test_spearman_is_minus_one_when_q1_range_perfectly_inverts_q2():
+    """Lý thuyết dự đoán tương quan ÂM: Q1 hẹp thì Q2 giãn."""
+    w = _wide([
+        {"q1_high": 101, "q1_low": 100, "q2_high": 110, "q2_low": 100},
+        {"q1_high": 102, "q1_low": 100, "q2_high": 108, "q2_low": 100},
+        {"q1_high": 103, "q1_low": 100, "q2_high": 106, "q2_low": 100},
+        {"q1_high": 104, "q1_low": 100, "q2_high": 104, "q2_low": 100},
+    ])
+    assert stat_q1_predicts_q2(w)["spearman_r1_r2"] == pytest.approx(-1.0)
+
+
+def test_spearman_is_rank_based_not_value_based():
+    """Spearman phải bất biến với phép biến đổi đơn điệu — đó là lý do dùng nó."""
+    w = _wide([
+        {"q1_high": 101, "q1_low": 100, "q2_high": 102, "q2_low": 100},
+        {"q1_high": 102, "q1_low": 100, "q2_high": 140, "q2_low": 100},
+        {"q1_high": 103, "q1_low": 100, "q2_high": 900, "q2_low": 100},
+    ])
+    assert stat_q1_predicts_q2(w)["spearman_r1_r2"] == pytest.approx(1.0)
+
+
+def test_true_open_persistence_counts_same_side():
+    """TO = open bar đầu Q2. Đo P(cuối Q4 cùng phía TO với đầu Q3)."""
+    w = _wide([
+        {"q2_open": 100, "q3_open": 105, "q4_close": 110},   # trên, trên -> cùng
+        {"q2_open": 100, "q3_open": 95, "q4_close": 90},     # dưới, dưới -> cùng
+        {"q2_open": 100, "q3_open": 105, "q4_close": 90},    # trên, dưới -> khác
+    ])
+    got = stat_true_open(w)
+    assert got["true_open_persistence"] == pytest.approx(2.0 / 3.0)
+    assert got["n"] == 3.0 and got["ties"] == 0.0
+
+
+def test_true_open_drops_ties_instead_of_assigning_a_side():
+    """Giá bằng đúng TO bị LOẠI, không gán về một phía (spec §4.2)."""
+    w = _wide([
+        {"q2_open": 100, "q3_open": 100, "q4_close": 110},   # hoà ở đầu Q3
+        {"q2_open": 100, "q3_open": 105, "q4_close": 100},   # hoà ở cuối Q4
+        {"q2_open": 100, "q3_open": 105, "q4_close": 110},   # cùng phía
+    ])
+    got = stat_true_open(w)
+    assert got["n"] == 1.0 and got["ties"] == 2.0
+    assert got["true_open_persistence"] == 1.0
+
+
+def test_true_open_all_ties_returns_nan():
+    w = _wide([{"q2_open": 100, "q3_open": 100, "q4_close": 100}])
+    got = stat_true_open(w)
+    assert got["n"] == 0.0 and np.isnan(got["true_open_persistence"])
