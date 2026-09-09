@@ -1,3 +1,7 @@
+import importlib
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -9,6 +13,8 @@ from rsi_fvg.quarter_variants import (DIRECT_VARIANT, PRIMARY_TIER, SCREEN_VARIA
                                       pick_winner, pooled, q3_dir, screen, split_halves,
                                       trailing_tight, variant_v1, variant_v2, variant_v3,
                                       variant_v4, variant_v5, verdict)
+
+ROOT = Path(__file__).resolve().parents[1]
 
 _RANGE = {"q1_high": 110.0, "q1_low": 90.0}
 _SWEEP_UP = _RANGE | {"q2_high": 115.0, "q2_low": 95.0, "q2_close": 105.0}
@@ -499,10 +505,12 @@ def test_screen_returns_four_variants_with_correct_columns():
 def test_confirm_returns_dict_with_required_keys_and_bool_flag():
     """Test end-to-end confirm() tren cung bo bar tung-chu-ky cua screen().
 
-    Kiem tra confirm tra ve dict co dung 6 khoa, beat_all_nulls la bool
-    (khong phai numpy bool hay None) vi logic quyet dinh o task sau branch
-    tren, VA ket qua khong suy bien (n > 0, real huu han) - phan fix round 1
-    thieu. Da xac nhan bang script chay thu: n=30, real=0.5.
+    Kiem tra confirm tra ve dict co dung bo khoa (khoa "p-value/n_up/n_dn"
+    them vao boi fix round cuoi cho legible/auditable, xem fix 3 va fix 4 cua
+    dot review cuoi nhanh), beat_all_nulls la bool (khong phai numpy bool hay
+    None) vi logic quyet dinh o task sau branch tren, VA ket qua khong suy
+    bien (n > 0, real huu han) - phan fix round 1 thieu. Da xac nhan bang
+    script chay thu: n=30, real=0.5.
     """
     bars = _build_variant_bars()
 
@@ -513,9 +521,11 @@ def test_confirm_returns_dict_with_required_keys_and_bool_flag():
     # Run confirm cho V1.
     result = confirm(bars, "q90", offsets, "V1")
 
-    # Kiem tra: dung 6 khoa.
-    assert set(result.keys()) == {"variant", "real", "n", "percentile", "n_nulls",
-                                  "beat_all_nulls"}
+    # Kiem tra: dung bo khoa da duoc chot (khoa pin, khong phai subset check -
+    # diem cua assertion nay la bo khoa bi khoa cung).
+    assert set(result.keys()) == {"variant", "real", "n", "n_up", "n_dn",
+                                  "percentile", "n_nulls", "k_nulls_ge",
+                                  "p_value", "beat_all_nulls"}
 
     # Kiem tra: variant la "V1".
     assert result["variant"] == "V1"
@@ -527,3 +537,97 @@ def test_confirm_returns_dict_with_required_keys_and_bool_flag():
     # Khong suy bien: phai co chu ky duoc chon va real phai huu han.
     assert result["n"] > 0
     assert np.isfinite(result["real"])
+
+
+def _make_gapped_bars(n1: int = 1200, n2: int = 1300, step: int = 300):
+    """2500 bar M5 lien tuc trong hai doan, cach nhau dung mot khe cuoi tuan
+    that (Chu nhat 18:00 NY -> Chu nhat 18:00 NY tuan sau), de cong chan
+    `verify_server_tz` PASS ma khong can du lieu MT5 that.
+
+    Khong co khe nao khac (moi doan lien tuc noi bo) nen kiem dinh 2 (khe
+    trong ngay) pass rong - dung y, chi can kiem dinh 1 (khe cuoi tuan) that.
+    """
+    sun1 = epoch_for_ny(2026, 6, 7, 18)    # Chu nhat
+    sun2 = epoch_for_ny(2026, 6, 14, 18)   # Chu nhat tuan sau
+    t1 = np.arange(sun1, sun1 + step * n1, step, dtype="int64")
+    t2 = np.arange(sun2, sun2 + step * n2, step, dtype="int64")
+    time = np.concatenate([t1, t2])
+    n = time.size
+    bars = make_bars([1.0] * n, [1.0] * n, [1.0] * n, [1.0] * n)
+    bars.time = time
+    return bars
+
+
+def _cli_module():
+    """Nap scripts/study_quarter_variants.py nhu mot module co the monkeypatch.
+
+    Cung cach test_cli.py da dung cho run_rsi2_swing: chen thu muc scripts/
+    vao sys.path roi importlib.import_module theo ten file (scripts/ khong
+    phai package).
+    """
+    if str(ROOT / "scripts") not in sys.path:
+        sys.path.insert(0, str(ROOT / "scripts"))
+    return importlib.import_module("study_quarter_variants")
+
+
+def test_main_wires_screen_to_first_half_and_confirm_to_second_half(monkeypatch, tmp_path):
+    """Pin chieu noi day quan trong nhat cua CLI (spec 1b sec 3-4): sang tren
+    NUA DAU, kiem CA HAI duong tren NUA SAU. Neu ai do hoan doi hai nua khi
+    goi `screen`/`confirm`, nghien cuu se sai ma van ra ket qua hop ly - chi
+    con nguoi review moi bat duoc dieu do tu truoc. Test nay thay the review
+    do bang mot assertion tu dong.
+
+    Monkeypatch `load_bars` de khong dung MT5/parquet that; monkeypatch
+    `screen`/`confirm` nhu chung duoc tra cuu trong module CLI (khong phai
+    trong rsi_fvg.quarter_variants) de ghi lai object `Bars` moi ham nhan
+    duoc, roi doi chieu voi `split_halves` goi truc tiep tren cung bo bar.
+    """
+    mod = _cli_module()
+    bars = _make_gapped_bars()
+    expected_first, expected_second = split_halves(bars)
+
+    monkeypatch.setattr(mod, "load_bars", lambda symbol, tf, data_dir: bars)
+
+    screen_calls: list = []
+    confirm_calls: list = []
+
+    def fake_screen(bars_first, tier, offsets, min_bars=3):
+        screen_calls.append(bars_first)
+        return pd.DataFrame([
+            {"variant": "V2", "real": 0.5, "n": 10.0, "percentile": 40.0},
+            {"variant": "V3", "real": 0.6, "n": 10.0, "percentile": 90.0},
+            {"variant": "V4", "real": 0.5, "n": 10.0, "percentile": 70.0},
+            {"variant": "V5", "real": 0.5, "n": 10.0, "percentile": 10.0},
+        ])
+
+    def fake_confirm(bars_second, tier, offsets, variant, min_bars=3):
+        confirm_calls.append((bars_second, variant))
+        return {"variant": variant, "real": 0.5, "n": 10.0, "n_up": 5.0,
+                "n_dn": 5.0, "percentile": 50.0, "n_nulls": 69,
+                "k_nulls_ge": 34, "p_value": 0.5, "beat_all_nulls": False}
+
+    monkeypatch.setattr(mod, "screen", fake_screen)
+    monkeypatch.setattr(mod, "confirm", fake_confirm)
+
+    rc = mod.main(["--tf", "M5", "--out-dir", str(tmp_path)])
+    assert rc == 0
+
+    # screen() nhan dung mot lan, dung NUA DAU.
+    assert len(screen_calls) == 1
+    assert np.array_equal(screen_calls[0].time, expected_first.time)
+
+    # confirm() nhan dung hai lan, CA HAI lan deu la NUA SAU.
+    assert len(confirm_calls) == 2
+    for bars_second, _variant in confirm_calls:
+        assert np.array_equal(bars_second.time, expected_second.time)
+
+    # Hai nua khong de chong nhau - bat mot test vo tinh truyen trung mot
+    # object hai lan roi goi la "da kiem tra".
+    assert expected_first.time[-1] < expected_second.time[0]
+    assert screen_calls[0].time[-1] < confirm_calls[0][0].time[0]
+
+    # Duong A dung bien the pre-specified; duong B dung bien the thang vong
+    # sang. Hoan doi hai duong cung se bi bat o day.
+    called_variants = [v for _, v in confirm_calls]
+    assert called_variants[0] == DIRECT_VARIANT == "V1"
+    assert called_variants[1] == "V3"      # percentile cao nhat trong fake_screen

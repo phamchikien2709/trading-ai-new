@@ -76,6 +76,21 @@ def pooled(up: np.ndarray, dn: np.ndarray, direction: np.ndarray,
             "n_up": float(u.sum()), "n_dn": float(d.sum())}
 
 
+def variant_v1(w: pd.DataFrame) -> dict[str, float]:
+    """V1 — Q3 đi CÙNG hướng sweep, tức đảo thesis của ⑥.
+
+    Lý do: số Phase 1 nói Q3 đi cùng hướng sweep 52,7% số lần.
+
+    CẢNH BÁO (spec 1b §7): V1 = 1 − ⑥ trên đúng cùng tập con, nên
+    `percentile(V1) = 100 − percentile(⑥)` một cách máy móc. Trên toàn dữ liệu
+    nó sẽ ra ~97 và con số đó VÔ GIÁ TRỊ, vì ⑥ đã được xem trước khi V1 được
+    nghĩ ra. Giá trị duy nhất của V1 là kiểm độ ổn định qua thời gian trên nửa
+    sau — không phải phát hiện.
+    """
+    up, dn = base_trigger(w)
+    return pooled(up, dn, q3_dir(w), against=False)
+
+
 TRAILING_WINDOW = 20
 
 
@@ -113,21 +128,6 @@ def variant_v2(w: pd.DataFrame) -> dict[str, float]:
     tight = trailing_tight(r1, TRAILING_WINDOW)
     up, dn = base_trigger(w)
     return pooled(up & tight, dn & tight, q3_dir(w), against=True)
-
-
-def variant_v1(w: pd.DataFrame) -> dict[str, float]:
-    """V1 — Q3 đi CÙNG hướng sweep, tức đảo thesis của ⑥.
-
-    Lý do: số Phase 1 nói Q3 đi cùng hướng sweep 52,7% số lần.
-
-    CẢNH BÁO (spec 1b §7): V1 = 1 − ⑥ trên đúng cùng tập con, nên
-    `percentile(V1) = 100 − percentile(⑥)` một cách máy móc. Trên toàn dữ liệu
-    nó sẽ ra ~97 và con số đó VÔ GIÁ TRỊ, vì ⑥ đã được xem trước khi V1 được
-    nghĩ ra. Giá trị duy nhất của V1 là kiểm độ ổn định qua thời gian trên nửa
-    sau — không phải phát hiện.
-    """
-    up, dn = base_trigger(w)
-    return pooled(up, dn, q3_dir(w), against=False)
 
 
 def variant_v3(w: pd.DataFrame) -> dict[str, float]:
@@ -258,6 +258,13 @@ def confirm(bars_second: Bars, tier: str, offsets: np.ndarray, variant: str,
     thầm mức α = 2,5% mà toàn nghiên cứu dựa vào. Lần chạy này có 69 lưới hữu
     hạn nên điều kiện luôn đúng, nhưng cờ phải không thể nói dối ở một lần
     chạy khác.
+
+    Cũng trả `k_nulls_ge` (số null >= giá trị thật) và p-value một phía đạt
+    được `(k+1)/(N+1)` — spec 1b §5 nói percentile không phải cơ sở quyết
+    định, và p-value là con số hợp pháp duy nhất để đọc "gần pass tới đâu"
+    ("92,8 trên 69 lưới" đọc thành 8,6% thay vì chỉ một percentile trần trụi).
+    Trả thêm `n_up`/`n_dn` từ `pooled` để tầng con nhỏ vẫn kiểm tra được —
+    spec tiền đề §4.2 (kế thừa) đòi báo cáo `n` cho mọi tập con điều kiện.
     """
     subset = {variant: VARIANTS[variant]}
     real = run_grid(bars_second, tier, min_bars=min_bars, stats=subset)
@@ -265,11 +272,16 @@ def confirm(bars_second: Bars, tier: str, offsets: np.ndarray, variant: str,
     value = real[f"{variant}.p"]
     col = nulls[f"{variant}.p"].to_numpy(dtype="float64")
     finite = col[np.isfinite(col)]
+    n_finite = int(finite.size)
+    k_ge = int(np.sum(finite >= value)) if np.isfinite(value) else n_finite
     return {
         "variant": variant, "real": value, "n": real[f"{variant}.n"],
+        "n_up": real[f"{variant}.n_up"], "n_dn": real[f"{variant}.n_dn"],
         "percentile": percentile_of(value, col),
-        "n_nulls": int(finite.size),
-        "beat_all_nulls": bool(finite.size >= MIN_FINITE_NULLS_FOR_ALPHA
+        "n_nulls": n_finite,
+        "k_nulls_ge": k_ge,
+        "p_value": (k_ge + 1) / (n_finite + 1) if n_finite > 0 else float("nan"),
+        "beat_all_nulls": bool(n_finite >= MIN_FINITE_NULLS_FOR_ALPHA
                                and np.isfinite(value) and np.all(finite < value)),
     }
 
