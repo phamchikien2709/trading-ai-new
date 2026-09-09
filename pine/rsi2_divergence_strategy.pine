@@ -1,0 +1,444 @@
+//@version=6
+// =============================================================================
+//  RSI2 Swing Divergence Strategy
+//
+//  Same signal block as pine/rsi2_divergence_indicator.pine — read the header there for
+//  the structure, the anchor-candle rule and the four signals. This file adds orders.
+//
+//  Structure:
+//    RSI(rsiFastLen) with levels fHi/fLo splits the chart into alternating segments.
+//    HIGH segment: cross UP fHi -> ... -> cross DOWN fLo  => swing high = highest(high)
+//    LOW  segment: cross DOWN fLo -> ... -> cross UP fHi  => swing low  = lowest(low)
+//    A swing is only KNOWN when its segment ends; that bar is the signal bar.
+//    A re-cross in the direction that STARTED the current segment does nothing: RSI2 dipping
+//    under fLo again while already in a LOW segment does NOT restart the low tracking, so a
+//    segment always runs to the next cross UP fHi and its extreme is the lowest low of the
+//    WHOLE leg. This differs from rsi2_swing / rsi2_ema_swing, where every cross down fLo
+//    resets seg_low, so a leg that dips twice reports the later, higher low.
+//
+//  Anchor RSI: a swing high takes RSI(rsiSlowLen) from a BULLISH candle, a swing low from
+//  a BEARISH one — the extreme bar itself when its colour fits, otherwise the first such
+//  candle walking BACKWARD with no segment limit. `close == open` is skipped.
+//
+//  Signals, over the two most recently confirmed swings of a kind (1 older, 2 just now).
+//  For a given pair DIV and HDIV are mutually exclusive: their price legs oppose.
+//
+//    HDIV buy   L2 > L1  and  R2 < R1   -> enter at once, SL = L2 - AtrMult*ATR
+//    HDIV sell  H2 < H1  and  R2 > R1   -> enter at once, SL = H2 + AtrMult*ATR
+//
+//    DIV  buy   L2 < L1  and  R2 > R1   -> ARM only
+//    DIV  sell  H2 > H1  and  R2 < R1   -> ARM only
+//  A regular pair does not trade on its own: price must first CLOSE beyond the swing that
+//  sits BETWEEN the two swings compared (the swing high between the two lows for a buy,
+//  the swing low between the two highs for a sell). Entry is that break bar; the SL still
+//  hangs off L2 / H2, not off the level broken, so the entry sits far past the SL swing
+//  and R is large by construction — the risk-% sizing turns that into a small position.
+//  An armed setup is dropped when a new swing of the same kind confirms, or after maxWait
+//  bars when that input is on.
+//  TP = TP_R x risk, measured from the real fill price. At most one signal per bar.
+//
+//  Known divergences vs a hedging MT5 backtest (by design, same as the sibling scripts):
+//   1. Pine has no spread model. `slippage` (~spread/2 in ticks) approximates it.
+//      XAUUSD mintick 0.01, spread ~0.26 -> 13 ticks. Edit the constant for your broker.
+//   2. Pine cannot hedge (net position). `Block opposite while in trade` = true skips
+//      opposite signals instead of reversing.
+// =============================================================================
+strategy("RSI2 Swing Divergence", shorttitle="RSI2-DIV-S", overlay=true,
+     pyramiding=0, calc_on_every_tick=false, process_orders_on_close=false,
+     initial_capital=10000, currency=currency.USD,
+     commission_type=strategy.commission.cash_per_contract, commission_value=0.035,
+     slippage=13,
+     max_labels_count=500, max_lines_count=500)
+
+// ---------------------------------------------------------------- inputs ----
+grpSetup = "Setups"
+useRegular = input.bool(true, "Phan ky thuong (DIV)", group=grpSetup,
+     tooltip="Buy: low thap dan nhung RSI neo tang. Sell: high cao dan nhung RSI neo giam. Tin hieu dao chieu.")
+useHidden  = input.bool(true, "Phan ky an (HDIV)", group=grpSetup,
+     tooltip="Buy: low CAO dan nhung RSI neo GIAM. Sell: high THAP dan nhung RSI neo TANG. Dao dau ca hai ve -> tin hieu tiep dien xu huong.")
+minRsiGap  = input.float(0.0, "Chenh RSI neo toi thieu", minval=0, step=0.5, group=grpSetup,
+     tooltip="0 = tat (chi can bat dang thuc chat). Siet lai khi phan ky 0.2 RSI toan la noise.")
+maxWait    = input.int(0, "Max bar tu luc arm den luc pha (0 = khong het han)", minval=0, group=grpSetup,
+     tooltip="Chi ap dung cho phan ky thuong. Setup luon bi huy khi co swing cung loai moi xac nhan (cap swing doi thi setup cu het nghia); input nay them mot han bar de khoi cho qua lau.")
+
+grpEntry = "Entry / Risk"
+tpR        = input.float(3.0, "Take profit (R)", minval=0.1, step=0.5, group=grpEntry)
+riskPct    = input.float(1.0, "Risk % of equity per trade", minval=0.01, step=0.25, group=grpEntry)
+enableBuy  = input.bool(true, "Enable BUY", group=grpEntry)
+enableSell = input.bool(true, "Enable SELL", group=grpEntry)
+blockOpp   = input.bool(true, "Block opposite signal while in trade", group=grpEntry,
+     tooltip="true = skip opposite signal while a position is open. false = opposite signal reverses the position (Pine is net-position).")
+
+grpStruct = "Structure RSI (fast)"
+rsiFastLen = input.int(2, "RSI length", minval=1, group=grpStruct)
+fHi        = input.float(90, "Cross up -> HIGH segment starts / LOW segment ends", group=grpStruct)
+fLo        = input.float(10, "Cross down -> LOW segment starts / HIGH segment ends", group=grpStruct)
+
+grpAnchor = "Anchor RSI (slow)"
+rsiSlowLen = input.int(14, "RSI length", minval=2, group=grpAnchor)
+
+grpSL = "Stop loss"
+atrLen  = input.int(14, "ATR length", minval=1, group=grpSL)
+atrMult = input.float(1.0, "ATR multiplier below/above swing", minval=0, step=0.25, group=grpSL)
+minSlTicks = input.int(0, "Min SL distance (ticks, 0 = off)", minval=0, group=grpSL,
+     tooltip="Skip the trade when the stop sits closer than this to the entry. The RSI2 structure can put it inside the spread, where a nominal risk % is a coin flip on the next tick.")
+
+grpViz = "Display"
+showSwings  = input.bool(true, "Swing markers + zigzag", group=grpViz)
+showAnchors = input.bool(true, "Nhan RSI tai nen neo", group=grpViz)
+showDiv     = input.bool(true, "Duong phan ky", group=grpViz)
+showArm     = input.bool(true, "Muc can pha khi dang cho (net cham cam)", group=grpViz)
+showLines   = input.bool(true, "Plot SL / TP of open trade", group=grpViz)
+
+// ------------------------------------------------------------ indicators ----
+rsiS = ta.rsi(close, rsiSlowLen)      // RSI neo
+rsiF = ta.rsi(close, rsiFastLen)      // RSI cau truc
+atr  = ta.atr(atrLen)
+bool ok = not na(rsiS) and not na(rsiF) and not na(rsiF[1]) and not na(atr)
+
+bool fUp = ok and rsiF[1] <= fHi and rsiF > fHi
+bool fDn = ok and rsiF[1] >= fLo and rsiF < fLo
+
+// -------------------------------------------------------- nen neo gan nhat --
+// Cap nhat TRUOC moi thu khac, nen doc bullRsi/bearRsi tren bar t la "nen cung mau gan
+// nhat tinh ca bar t" — dung dinh nghia nen neo. close == open khong cap nhat gi.
+var int   bullBar  = na
+var float bullRsi  = na
+var float bullHigh = na
+var int   bearBar  = na
+var float bearRsi  = na
+var float bearLow  = na
+if close > open
+    bullBar  := bar_index
+    bullRsi  := rsiS
+    bullHigh := high
+if close < open
+    bearBar  := bar_index
+    bearRsi  := rsiS
+    bearLow  := low
+
+// ------------------------------------------------- RSI2 swing structure ----
+// seg: 0 undefined (before the first cross), 1 HIGH segment, -1 LOW segment
+var int   seg = 0
+var float segHigh      = na
+var int   segHighBar   = na
+var float segHighRsi   = na
+var int   segHighAnc   = na
+var float segHighAncPx = na
+var float segLow       = na
+var int   segLowBar    = na
+var float segLowRsi    = na
+var int   segLowAnc    = na
+var float segLowAncPx  = na
+
+// 1. extend the running extreme (the boundary bar belongs to both segments)
+if seg == 1 and high > segHigh
+    segHigh      := high
+    segHighBar   := bar_index
+    segHighRsi   := bullRsi
+    segHighAnc   := bullBar
+    segHighAncPx := bullHigh
+if seg == -1 and low < segLow
+    segLow      := low
+    segLowBar   := bar_index
+    segLowRsi   := bearRsi
+    segLowAnc   := bearBar
+    segLowAncPx := bearLow
+
+// The two most recently confirmed swings of each kind: prev = older, last = just confirmed
+var float prevLowP      = na
+var float prevLowR      = na
+var int   prevLowBar    = na
+var float lastLowP      = na
+var float lastLowR      = na
+var int   lastLowBar    = na
+var int   lastLowAnc    = na
+var float lastLowAncPx  = na
+var float prevHighP     = na
+var float prevHighR     = na
+var int   prevHighBar   = na
+var float lastHighP     = na
+var float lastHighR     = na
+var int   lastHighBar   = na
+var int   lastHighAnc   = na
+var float lastHighAncPx = na
+
+bool lowConf  = false
+bool highConf = false
+
+// 2. transitions — shift the history here, evaluate the signals below
+if fUp
+    if seg == -1
+        lowConf      := true
+        prevLowP     := lastLowP
+        prevLowR     := lastLowR
+        prevLowBar   := lastLowBar
+        lastLowP     := segLow
+        lastLowR     := segLowRsi
+        lastLowBar   := segLowBar
+        lastLowAnc   := segLowAnc
+        lastLowAncPx := segLowAncPx
+    if seg != 1                       // only a real transition restarts the HIGH extreme
+        segHigh      := high
+        segHighBar   := bar_index
+        segHighRsi   := bullRsi
+        segHighAnc   := bullBar
+        segHighAncPx := bullHigh
+    seg := 1
+if fDn
+    if seg == 1
+        highConf      := true
+        prevHighP     := lastHighP
+        prevHighR     := lastHighR
+        prevHighBar   := lastHighBar
+        lastHighP     := segHigh
+        lastHighR     := segHighRsi
+        lastHighBar   := segHighBar
+        lastHighAnc   := segHighAnc
+        lastHighAncPx := segHighAncPx
+    if seg != -1                      // only a real transition restarts the LOW extreme
+        segLow      := low
+        segLowBar   := bar_index
+        segLowRsi   := bearRsi
+        segLowAnc   := bearBar
+        segLowAncPx := bearLow
+    seg := -1
+
+// -------------------------------------------------------------- signals ----
+bool divBuyPair  = false      // regular divergence detected -> ARM, khong vao lenh ngay
+bool divSellPair = false
+bool buyHid      = false      // hidden divergence -> vao lenh ngay tai nen xac nhan
+bool sellHid     = false
+
+// A pair is comparable only when both swings carry an anchor RSI. A swing whose backward
+// walk found no candle of the right colour (only possible during the RSI warm-up) keeps
+// na and produces no signal — but it still becomes the "older" swing of the next pair.
+bool lowPair  = lowConf  and not na(prevLowP)  and not na(prevLowR)  and not na(lastLowR)
+bool highPair = highConf and not na(prevHighP) and not na(prevHighR) and not na(lastHighR)
+
+if ok and lowPair
+    if useRegular and lastLowP < prevLowP and lastLowR - prevLowR > minRsiGap
+        divBuyPair := true
+    if useHidden and lastLowP > prevLowP and prevLowR - lastLowR > minRsiGap
+        buyHid := true
+if ok and highPair
+    if useRegular and lastHighP > prevHighP and prevHighR - lastHighR > minRsiGap
+        divSellPair := true
+    if useHidden and lastHighP < prevHighP and lastHighR - prevHighR > minRsiGap
+        sellHid := true
+
+// ------------------------- regular divergence: arm, then wait for the structure break ----
+// The swing that has to break is already in the state. The moment a swing low confirms,
+// lastHighP IS the swing high sitting between the two lows being compared: the structure
+// alternates, so exactly one swing high can lie between them. Mirror for the sell side.
+// A new swing of the same kind rebuilds the pair, so it also drops the armed setup.
+var bool  armBuy       = false
+var float armBuyLevel  = na       // Hmid — close must break ABOVE this
+var float armBuySwing  = na       // L2 — the SL still hangs off this one
+var int   armBuyBar    = na
+var line  armBuyLn     = na
+var bool  armSell      = false
+var float armSellLevel = na       // Lmid — close must break BELOW this
+var float armSellSwing = na       // H2
+var int   armSellBar   = na
+var line  armSellLn    = na
+
+if lowConf
+    armBuy := false
+    if divBuyPair and not na(lastHighP)
+        armBuy      := true
+        armBuyLevel := lastHighP
+        armBuySwing := lastLowP
+        armBuyBar   := bar_index
+        if showArm
+            armBuyLn := line.new(bar_index, armBuyLevel, bar_index + 1, armBuyLevel,
+                 color=color.new(color.orange, 0), width=1, style=line.style_dotted)
+if highConf
+    armSell := false
+    if divSellPair and not na(lastLowP)
+        armSell      := true
+        armSellLevel := lastLowP
+        armSellSwing := lastHighP
+        armSellBar   := bar_index
+        if showArm
+            armSellLn := line.new(bar_index, armSellLevel, bar_index + 1, armSellLevel,
+                 color=color.new(color.orange, 0), width=1, style=line.style_dotted)
+
+if armBuy and maxWait > 0 and bar_index - armBuyBar > maxWait
+    armBuy := false
+if armSell and maxWait > 0 and bar_index - armSellBar > maxWait
+    armSell := false
+
+// A break is a CLOSE beyond the level, so the entry price is genuinely past it. The break
+// can land on the arming bar itself when that bar is violent enough.
+bool buyDiv  = armBuy  and close > armBuyLevel
+bool sellDiv = armSell and close < armSellLevel
+
+// Regular: SL hangs off L2 / H2 — the swing of the pair, NOT the level just broken. The
+// entry sits far past that swing, so R is large by construction and the risk-% sizing
+// below turns that straight into a small position.
+// Hidden: unchanged, fires at the confirmation bar with the SL on the fresh swing.
+float buySL  = na
+float sellSL = na
+if buyDiv
+    buySL  := armBuySwing - atrMult * atr
+    armBuy := false
+if sellDiv
+    sellSL  := armSellSwing + atrMult * atr
+    armSell := false
+if buyHid and not buyDiv
+    buySL := lastLowP - atrMult * atr
+if sellHid and not sellDiv
+    sellSL := lastHighP + atrMult * atr
+
+if armBuy and not na(armBuyLn)
+    line.set_x2(armBuyLn, bar_index)
+if armSell and not na(armSellLn)
+    line.set_x2(armSellLn, bar_index)
+
+bool buyTrig  = buyDiv or buyHid
+bool sellTrig = sellDiv or sellHid
+
+// ------------------------------------------------------------ execution ----
+// Position handling lives here, NOT in the signal block: a trigger is consumed whether or
+// not the trade actually opens.
+var float lSL = na
+var float lTP = na
+var bool  lArm = false
+var int   lSigBar = na
+var float sSL = na
+var float sTP = na
+var bool  sArm = false
+var int   sSigBar = na
+
+bool inLong  = strategy.position_size > 0
+bool inShort = strategy.position_size < 0
+
+if lArm and not na(lSigBar) and bar_index > lSigBar and not inLong
+    lArm := false
+if sArm and not na(sSigBar) and bar_index > sSigBar and not inShort
+    sArm := false
+
+// re-arm the exit with the exact R once the real fill price is known
+if lArm and inLong
+    float fillPx = strategy.position_avg_price
+    lTP := fillPx + tpR * (fillPx - lSL)
+    strategy.exit("LX", from_entry="L", stop=lSL, limit=lTP)
+    lArm := false
+if sArm and inShort
+    float fillPx = strategy.position_avg_price
+    sTP := fillPx - tpR * (sSL - fillPx)
+    strategy.exit("SX", from_entry="S", stop=sSL, limit=sTP)
+    sArm := false
+
+string alertJson = na
+
+if buyTrig and enableBuy
+    float slDist = close - buySL
+    bool blocked = inLong or (blockOpp and inShort)
+    bool tooClose = minSlTicks > 0 and slDist < minSlTicks * syminfo.mintick
+    if not blocked and not tooClose and slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("L", strategy.long, qty=qty, comment=buyHid ? "BUY hidden div" : "BUY div")
+        strategy.exit("LX", from_entry="L", stop=buySL, limit=close + tpR * slDist)   // provisional TP; SL active from fill
+        lSL := buySL
+        lTP := close + tpR * slDist
+        lArm := true
+        lSigBar := bar_index
+        alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BUY","setup":"' + (buyHid ? "HDIV" : "DIV") + '"' + ',"sl":' + str.tostring(buySL, "#.#####") + ',"tp_r":' + str.tostring(tpR) + ',"ref_price":' + str.tostring(close, "#.#####") + '}'
+    else if blocked
+        label.new(bar_index, low, "BUY blocked", style=label.style_label_up, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+    else if tooClose
+        label.new(bar_index, low, "BUY skipped: SL too close", style=label.style_label_up, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+if sellTrig and enableSell
+    float slDist = sellSL - close
+    bool blocked = inShort or (blockOpp and inLong)
+    bool tooClose = minSlTicks > 0 and slDist < minSlTicks * syminfo.mintick
+    if not blocked and not tooClose and slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("S", strategy.short, qty=qty, comment=sellHid ? "SELL hidden div" : "SELL div")
+        strategy.exit("SX", from_entry="S", stop=sellSL, limit=close - tpR * slDist)
+        sSL := sellSL
+        sTP := close - tpR * slDist
+        sArm := true
+        sSigBar := bar_index
+        alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"SELL","setup":"' + (sellHid ? "HDIV" : "DIV") + '"' + ',"sl":' + str.tostring(sellSL, "#.#####") + ',"tp_r":' + str.tostring(tpR) + ',"ref_price":' + str.tostring(close, "#.#####") + '}'
+    else if blocked
+        label.new(bar_index, high, "SELL blocked", style=label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+    else if tooClose
+        label.new(bar_index, high, "SELL skipped: SL too close", style=label.style_label_down, color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+if not na(alertJson)
+    alert(alertJson, alert.freq_once_per_bar_close)
+
+// --------------------------------------------------------------- visuals ----
+if showSwings and lowConf
+    label.new(lastLowBar, lastLowP, "L", style=label.style_label_up,
+         color=color.new(color.green, 20), textcolor=color.white, size=size.tiny)
+    if not na(lastHighBar)
+        line.new(lastHighBar, lastHighP, lastLowBar, lastLowP,
+             color=color.new(color.gray, 30), width=1)
+if showSwings and highConf
+    label.new(lastHighBar, lastHighP, "H", style=label.style_label_down,
+         color=color.new(color.red, 20), textcolor=color.white, size=size.tiny)
+    if not na(lastLowBar)
+        line.new(lastLowBar, lastLowP, lastHighBar, lastHighP,
+             color=color.new(color.gray, 30), width=1)
+
+if showAnchors and lowConf and not na(lastLowAnc)
+    label.new(lastLowAnc, lastLowAncPx, str.tostring(lastLowR, "#.#"),
+         style=label.style_label_up, color=color.new(color.purple, 25),
+         textcolor=color.white, size=size.tiny)
+if showAnchors and highConf and not na(lastHighAnc)
+    label.new(lastHighAnc, lastHighAncPx, str.tostring(lastHighR, "#.#"),
+         style=label.style_label_down, color=color.new(color.purple, 25),
+         textcolor=color.white, size=size.tiny)
+
+// Drawn when the divergence is DETECTED, not when it is traded — a regular pair that never
+// breaks its middle swing still shows up.
+if showDiv and (divBuyPair or buyHid)
+    line.new(prevLowBar, prevLowP, lastLowBar, lastLowP,
+         color=color.new(color.teal, 0), width=2, style=line.style_dashed)
+if showDiv and (divSellPair or sellHid)
+    line.new(prevHighBar, prevHighP, lastHighBar, lastHighP,
+         color=color.new(color.maroon, 0), width=2, style=line.style_dashed)
+
+plotshape(buyDiv  and enableBuy,  title="BUY div",         style=shape.triangleup,   location=location.belowbar, color=color.green,  size=size.small, text="B")
+plotshape(buyHid  and enableBuy,  title="BUY hidden div",  style=shape.triangleup,   location=location.belowbar, color=color.teal,   size=size.small, text="Bh")
+plotshape(sellDiv and enableSell, title="SELL div",        style=shape.triangledown, location=location.abovebar, color=color.red,    size=size.small, text="S")
+plotshape(sellHid and enableSell, title="SELL hidden div", style=shape.triangledown, location=location.abovebar, color=color.maroon, size=size.small, text="Sh")
+
+// SL / TP of the open trade
+float plotSL = inLong ? lSL : inShort ? sSL : na
+float plotTP = inLong ? lTP : inShort ? sTP : na
+plot(showLines ? plotSL : na, "SL", color=color.new(color.red, 0),   style=plot.style_linebr, linewidth=1)
+plot(showLines ? plotTP : na, "TP", color=color.new(color.green, 0), style=plot.style_linebr, linewidth=1)
+
+// ----------------------------------------------------------------- table ----
+var table tbl = table.new(position.top_right, 3, 7, border_width=1)
+if barstate.islast
+    string segTxt = seg == 1 ? "HIGH seg" : seg == -1 ? "LOW seg" : "-"
+    table.cell(tbl, 0, 0, "", text_size=size.small)
+    table.cell(tbl, 1, 0, "truoc", text_size=size.small)
+    table.cell(tbl, 2, 0, "gan nhat", text_size=size.small)
+    table.cell(tbl, 0, 1, "swing low", text_size=size.small)
+    table.cell(tbl, 1, 1, na(prevLowP) ? "-" : str.tostring(prevLowP, format.mintick), text_size=size.small)
+    table.cell(tbl, 2, 1, na(lastLowP) ? "-" : str.tostring(lastLowP, format.mintick), text_size=size.small)
+    table.cell(tbl, 0, 2, "RSI neo low", text_size=size.small)
+    table.cell(tbl, 1, 2, na(prevLowR) ? "-" : str.tostring(prevLowR, "#.#"), text_size=size.small)
+    table.cell(tbl, 2, 2, na(lastLowR) ? "-" : str.tostring(lastLowR, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 3, "swing high", text_size=size.small)
+    table.cell(tbl, 1, 3, na(prevHighP) ? "-" : str.tostring(prevHighP, format.mintick), text_size=size.small)
+    table.cell(tbl, 2, 3, na(lastHighP) ? "-" : str.tostring(lastHighP, format.mintick), text_size=size.small)
+    table.cell(tbl, 0, 4, "RSI neo high", text_size=size.small)
+    table.cell(tbl, 1, 4, na(prevHighR) ? "-" : str.tostring(prevHighR, "#.#"), text_size=size.small)
+    table.cell(tbl, 2, 4, na(lastHighR) ? "-" : str.tostring(lastHighR, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 5, "segment", text_size=size.small)
+    table.cell(tbl, 1, 5, segTxt, text_size=size.small)
+    table.cell(tbl, 2, 5, "ATR " + str.tostring(atr, format.mintick), text_size=size.small)
+    table.cell(tbl, 0, 6, "cho pha buy/sell", text_size=size.small)
+    table.cell(tbl, 1, 6, armBuy  ? str.tostring(armBuyLevel,  format.mintick) : "-", text_size=size.small)
+    table.cell(tbl, 2, 6, armSell ? str.tostring(armSellLevel, format.mintick) : "-", text_size=size.small)
