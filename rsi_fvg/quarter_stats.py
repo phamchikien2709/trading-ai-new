@@ -129,3 +129,45 @@ def stat_true_open(w: pd.DataFrame) -> dict[str, float]:
     same = np.sign(a[keep]) == np.sign(b[keep])
     return {"true_open_persistence": _mean_or_nan(same),
             "n": float(keep.sum()), "ties": float((~keep).sum())}
+
+
+def stat_reclaim_q3(w: pd.DataFrame) -> dict[str, float]:
+    """⑥ Sau khi Q2 sweep biên Q1 rồi ĐÓNG LẠI bên trong, Q3 có đi ngược không.
+
+    Đây là thesis sẽ thành luật vào lệnh ở Phase 2, và `reclaim_pooled_against`
+    là con số duy nhất mà luật kết luận §7 dùng.
+
+      Sweep lên  + reclaim: q2_high > q1_high VÀ q2_close < q1_high -> P(Q3 giảm)
+      Sweep xuống + reclaim: q2_low  < q1_low  VÀ q2_close > q1_low  -> P(Q3 tăng)
+      Pooled: gộp hai tập, P(Q3 đi NGƯỢC hướng sweep)
+
+    Hai luật loại, cả hai đều có ý:
+      - Hoà bị loại (spec §4.2): q2_close bằng đúng biên, hoặc Q3 đóng bằng mở.
+        Dùng < và > thay cho <= và >= là cách loại hoà ở biên.
+      - Chu kỳ sweep CẢ HAI phía bị loại khỏi cả ba con số. Spec không nói tới
+        trường hợp này; lý thuyết không đưa ra kỳ vọng hướng nào cho nó, và đưa
+        vào pooled sẽ đếm một chu kỳ hai lần với hai kỳ vọng trái nhau.
+    """
+    q1h = w["q1_high"].to_numpy()
+    q1l = w["q1_low"].to_numpy()
+    q2h = w["q2_high"].to_numpy()
+    q2l = w["q2_low"].to_numpy()
+    q2c = w["q2_close"].to_numpy()
+    q3_dir = np.sign(w["q3_close"].to_numpy() - w["q3_open"].to_numpy())
+
+    swept_up = (q2h > q1h) & (q2c < q1h)
+    swept_dn = (q2l < q1l) & (q2c > q1l)
+    both = swept_up & swept_dn
+    live = q3_dir != 0                       # Q3 phẳng là hoà, loại
+    up = swept_up & ~both & live
+    dn = swept_dn & ~both & live
+
+    against_up = q3_dir[up] < 0
+    against_dn = q3_dir[dn] > 0
+    pooled = np.concatenate([against_up, against_dn])
+    return {
+        "reclaim_up_p_q3_down": _mean_or_nan(against_up), "n_up": float(up.sum()),
+        "reclaim_dn_p_q3_up": _mean_or_nan(against_dn), "n_dn": float(dn.sum()),
+        "reclaim_pooled_against": _mean_or_nan(pooled), "n_pooled": float(pooled.size),
+        "n_both_sides": float(both.sum()),
+    }

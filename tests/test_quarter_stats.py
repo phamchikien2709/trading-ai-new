@@ -5,7 +5,8 @@ import pytest
 from conftest import epoch_for_ny, make_bars
 from rsi_fvg.quarter_stats import (MIN_BARS_PER_QUARTER, aggregate_cycles,
                                    stat_displacement_by_index, stat_q1_predicts_q2,
-                                   stat_range_by_index, stat_sweep, stat_true_open)
+                                   stat_range_by_index, stat_reclaim_q3, stat_sweep,
+                                   stat_true_open)
 from rsi_fvg.quarters import label_quarters
 
 
@@ -182,3 +183,84 @@ def test_true_open_all_ties_returns_nan():
     w = _wide([{"q2_open": 100, "q3_open": 100, "q4_close": 100}])
     got = stat_true_open(w)
     assert got["n"] == 0.0 and np.isnan(got["true_open_persistence"])
+
+
+_RANGE = {"q1_high": 110.0, "q1_low": 90.0}
+
+
+def test_reclaim_up_requires_sweep_and_close_back_inside():
+    """Sweep lên: q2_high > q1_high VÀ q2_close < q1_high. Đo P(Q3 giảm)."""
+    w = _wide([
+        _RANGE | {"q2_high": 115, "q2_low": 95, "q2_close": 105,
+                  "q3_open": 105, "q3_close": 100},          # reclaim, Q3 giảm
+        _RANGE | {"q2_high": 115, "q2_low": 95, "q2_close": 105,
+                  "q3_open": 105, "q3_close": 108},          # reclaim, Q3 tăng
+        _RANGE | {"q2_high": 115, "q2_low": 95, "q2_close": 112,
+                  "q3_open": 112, "q3_close": 100},          # KHÔNG reclaim, loại
+    ])
+    got = stat_reclaim_q3(w)
+    assert got["n_up"] == 2.0
+    assert got["reclaim_up_p_q3_down"] == 0.5
+
+
+def test_reclaim_down_is_mirrored():
+    w = _wide([
+        _RANGE | {"q2_high": 105, "q2_low": 85, "q2_close": 95,
+                  "q3_open": 95, "q3_close": 100},           # reclaim, Q3 tăng
+        _RANGE | {"q2_high": 105, "q2_low": 85, "q2_close": 95,
+                  "q3_open": 95, "q3_close": 92},            # reclaim, Q3 giảm
+    ])
+    got = stat_reclaim_q3(w)
+    assert got["n_dn"] == 2.0
+    assert got["reclaim_dn_p_q3_up"] == 0.5
+
+
+def test_reclaim_pooled_normalises_direction():
+    """Pooled đo P(Q3 đi NGƯỢC hướng sweep), gộp cả hai phía."""
+    w = _wide([
+        _RANGE | {"q2_high": 115, "q2_low": 95, "q2_close": 105,
+                  "q3_open": 105, "q3_close": 100},          # sweep lên, Q3 giảm -> ngược
+        _RANGE | {"q2_high": 105, "q2_low": 85, "q2_close": 95,
+                  "q3_open": 95, "q3_close": 100},           # sweep xuống, Q3 tăng -> ngược
+        _RANGE | {"q2_high": 115, "q2_low": 95, "q2_close": 105,
+                  "q3_open": 105, "q3_close": 108},          # sweep lên, Q3 tăng -> theo
+    ])
+    got = stat_reclaim_q3(w)
+    assert got["n_pooled"] == 3.0
+    assert got["reclaim_pooled_against"] == pytest.approx(2.0 / 3.0)
+
+
+def test_reclaim_excludes_cycles_that_swept_both_sides():
+    """Sweep cả hai phía: lý thuyết không có kỳ vọng hướng nào => loại khỏi cả ba.
+
+    Đưa vào pooled sẽ đếm một chu kỳ hai lần với hai kỳ vọng trái nhau.
+    """
+    w = _wide([
+        _RANGE | {"q2_high": 115, "q2_low": 85, "q2_close": 100,
+                  "q3_open": 100, "q3_close": 95},           # cả hai phía
+        _RANGE | {"q2_high": 115, "q2_low": 95, "q2_close": 105,
+                  "q3_open": 105, "q3_close": 100},          # chỉ lên
+    ])
+    got = stat_reclaim_q3(w)
+    assert got["n_both_sides"] == 1.0
+    assert got["n_up"] == 1.0 and got["n_dn"] == 0.0
+    assert got["n_pooled"] == 1.0
+
+
+def test_reclaim_drops_ties_at_the_boundary_and_in_q3():
+    """q2_close bằng đúng biên là hoà; Q3 không đổi giá cũng là hoà. Cả hai bị loại."""
+    w = _wide([
+        _RANGE | {"q2_high": 115, "q2_low": 95, "q2_close": 110,
+                  "q3_open": 105, "q3_close": 100},          # close == q1_high -> hoà
+        _RANGE | {"q2_high": 115, "q2_low": 95, "q2_close": 105,
+                  "q3_open": 105, "q3_close": 105},          # Q3 phẳng -> hoà
+    ])
+    got = stat_reclaim_q3(w)
+    assert got["n_up"] == 0.0 and got["n_pooled"] == 0.0
+    assert np.isnan(got["reclaim_pooled_against"])
+
+
+def test_reclaim_on_empty_table_returns_nan():
+    got = stat_reclaim_q3(_wide([]).iloc[0:0])
+    assert np.isnan(got["reclaim_pooled_against"])
+    assert got["n_pooled"] == 0.0
