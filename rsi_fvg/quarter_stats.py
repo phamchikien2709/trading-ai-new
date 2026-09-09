@@ -51,3 +51,46 @@ def aggregate_cycles(bars: Bars, labels: QuarterLabels,
         n = wide[f"q{q}_n"].to_numpy(dtype="float64")
         keep &= np.isfinite(n) & (n >= min_bars)
     return wide.loc[keep]
+
+
+QUARTERS = (1, 2, 3, 4)
+
+
+def _mean_or_nan(x: np.ndarray) -> float:
+    return float(np.mean(x)) if x.size else float("nan")
+
+
+def stat_sweep(w: pd.DataFrame) -> dict[str, float]:
+    """① Tỷ lệ chu kỳ mà Q2 vượt ra ngoài range của Q1 (Defining Range).
+
+    So sánh là > và <, không phải >= và <=: chạm đúng biên không phải sweep.
+    """
+    up = w["q2_high"].to_numpy() > w["q1_high"].to_numpy()
+    dn = w["q2_low"].to_numpy() < w["q1_low"].to_numpy()
+    return {"sweep_rate": _mean_or_nan(up | dn), "n": float(len(w))}
+
+
+def stat_range_by_index(w: pd.DataFrame) -> dict[str, float]:
+    """② Range trung bình theo chỉ số quarter. Lý thuyết nói Q1 nhỏ nhất."""
+    out: dict[str, float] = {}
+    for q in QUARTERS:
+        r = (w[f"q{q}_high"] - w[f"q{q}_low"]).to_numpy()
+        out[f"range_q{q}"] = _mean_or_nan(r)
+    mean_all = float(np.mean([out[f"range_q{q}"] for q in QUARTERS]))
+    out["range_q1_ratio"] = (out["range_q1"] / mean_all
+                             if mean_all and np.isfinite(mean_all) else float("nan"))
+    out["n"] = float(len(w))
+    return out
+
+
+def stat_displacement_by_index(w: pd.DataFrame) -> dict[str, float]:
+    """③ |close - open| trung bình theo chỉ số quarter. Lý thuyết nói Q3 lớn nhất."""
+    out: dict[str, float] = {}
+    for q in QUARTERS:
+        d = np.abs((w[f"q{q}_close"] - w[f"q{q}_open"]).to_numpy())
+        out[f"disp_q{q}"] = _mean_or_nan(d)
+    mean_all = float(np.mean([out[f"disp_q{q}"] for q in QUARTERS]))
+    out["disp_q3_ratio"] = (out["disp_q3"] / mean_all
+                            if mean_all and np.isfinite(mean_all) else float("nan"))
+    out["n"] = float(len(w))
+    return out

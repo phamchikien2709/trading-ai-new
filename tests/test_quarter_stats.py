@@ -3,7 +3,9 @@ import pandas as pd
 import pytest
 
 from conftest import epoch_for_ny, make_bars
-from rsi_fvg.quarter_stats import MIN_BARS_PER_QUARTER, aggregate_cycles
+from rsi_fvg.quarter_stats import (MIN_BARS_PER_QUARTER, aggregate_cycles,
+                                   stat_displacement_by_index, stat_range_by_index,
+                                   stat_sweep)
 from rsi_fvg.quarters import label_quarters
 
 
@@ -66,3 +68,66 @@ def test_aggregate_cycles_min_bars_is_a_parameter():
     bars = _one_session_bars(n_per_quarter=(6, 6, 2, 6))
     assert len(aggregate_cycles(bars, label_quarters(bars.time, "q90"), min_bars=2)) == 1
     assert MIN_BARS_PER_QUARTER == 3
+
+
+def _wide(rows: list[dict]) -> pd.DataFrame:
+    """Bảng chu kỳ dựng tay. Thiếu cột nào thì điền giá trị trung tính.
+
+    Danh sách rỗng vẫn phải trả về DataFrame CÓ ĐỦ CỘT: aggregate_cycles luôn
+    reindex về đủ cột nên bảng rỗng thật vẫn có cột, và pd.DataFrame([]) thì
+    không — helper phải mô phỏng đúng thứ production sinh ra.
+    """
+    base = {}
+    for q in (1, 2, 3, 4):
+        base |= {f"q{q}_open": 100.0, f"q{q}_high": 101.0,
+                 f"q{q}_low": 99.0, f"q{q}_close": 100.0, f"q{q}_n": 10.0}
+    if not rows:
+        return pd.DataFrame(columns=list(base)).astype("float64")
+    return pd.DataFrame([base | r for r in rows])
+
+
+def test_stat_sweep_counts_either_side():
+    w = _wide([
+        {"q1_high": 110, "q1_low": 90, "q2_high": 111, "q2_low": 95},   # sweep lên
+        {"q1_high": 110, "q1_low": 90, "q2_high": 105, "q2_low": 89},   # sweep xuống
+        {"q1_high": 110, "q1_low": 90, "q2_high": 105, "q2_low": 95},   # trong range
+        {"q1_high": 110, "q1_low": 90, "q2_high": 111, "q2_low": 89},   # cả hai phía
+    ])
+    got = stat_sweep(w)
+    assert got["sweep_rate"] == 0.75
+    assert got["n"] == 4.0
+
+
+def test_stat_sweep_boundary_touch_is_not_a_sweep():
+    """Bằng đúng biên KHÔNG phải sweep — so sánh phải là > và <, không phải >= <=."""
+    w = _wide([{"q1_high": 110, "q1_low": 90, "q2_high": 110, "q2_low": 90}])
+    assert stat_sweep(w)["sweep_rate"] == 0.0
+
+
+def test_stat_range_by_index_and_q1_ratio():
+    w = _wide([{
+        "q1_high": 102, "q1_low": 100,     # range 2
+        "q2_high": 108, "q2_low": 100,     # range 8
+        "q3_high": 104, "q3_low": 100,     # range 4
+        "q4_high": 106, "q4_low": 100,     # range 6
+    }])
+    got = stat_range_by_index(w)
+    assert got["range_q1"] == 2.0 and got["range_q2"] == 8.0
+    assert got["range_q1_ratio"] == pytest.approx(2.0 / 5.0)   # mean(2,8,4,6) = 5
+
+
+def test_stat_displacement_uses_absolute_value():
+    w = _wide([
+        {"q1_open": 100, "q1_close": 103, "q3_open": 100, "q3_close": 90},
+        {"q1_open": 100, "q1_close": 97, "q3_open": 100, "q3_close": 110},
+    ])
+    got = stat_displacement_by_index(w)
+    assert got["disp_q1"] == 3.0        # |+3| và |-3| đều là 3
+    assert got["disp_q3"] == 10.0
+
+
+def test_stats_on_empty_table_return_nan_not_crash():
+    w = _wide([]).iloc[0:0]
+    assert np.isnan(stat_sweep(w)["sweep_rate"])
+    assert np.isnan(stat_range_by_index(w)["range_q1"])
+    assert np.isnan(stat_displacement_by_index(w)["disp_q1"])
