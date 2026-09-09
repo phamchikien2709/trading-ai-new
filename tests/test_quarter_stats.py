@@ -329,3 +329,40 @@ def test_run_null_has_one_row_per_offset():
     out = run_null(bars, "q90", offsets)
     assert len(out) == 2
     assert list(out["anchor_offset"]) == [1800, 3600]
+
+
+def test_stats_param_defaults_to_phase1_behaviour_exactly():
+    """Mac dinh phai giu hanh vi Phase 1 khong doi mot bit (spec 1b §8)."""
+    bars = _one_session_bars()
+    implicit = run_grid(bars, "q90")
+    explicit = run_grid(bars, "q90", stats=STATS)
+    # Compare dicts handling NaN values (NaN != NaN in Python)
+    assert set(implicit.keys()) == set(explicit.keys())
+    for key in implicit:
+        v1, v2 = implicit[key], explicit[key]
+        if isinstance(v1, float) and isinstance(v2, float) and np.isnan(v1) and np.isnan(v2):
+            continue
+        assert v1 == v2, f"{key}: {v1} != {v2}"
+    assert {k.split(".")[0] for k in implicit} == {
+        "sweep", "range_by_index", "displacement_by_index",
+        "q1_predicts_q2", "true_open", "reclaim_q3"}
+
+
+def test_stats_param_restricts_run_grid_to_the_given_dict():
+    bars = _one_session_bars()
+    only = run_grid(bars, "q90", stats={"sweep": stat_sweep})
+    assert set(only) == {"sweep.sweep_rate", "sweep.n"}
+
+
+def test_stats_param_flows_through_run_null():
+    bars = _one_session_bars()
+    out = run_null(bars, "q90", np.array([1800], dtype="int64"),
+                   stats={"sweep": stat_sweep})
+    assert set(out.columns) == {"anchor_offset", "sweep.sweep_rate", "sweep.n"}
+
+
+def test_stats_default_is_none_not_a_shared_dict():
+    """Mutable default la footgun: mot caller mutate se doc sang moi caller khac."""
+    import inspect
+    for fn in (run_grid, run_null):
+        assert inspect.signature(fn).parameters["stats"].default is None

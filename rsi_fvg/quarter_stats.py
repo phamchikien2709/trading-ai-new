@@ -214,24 +214,34 @@ def make_offsets(tier: str, bar_seconds: int, shifts: int, seed: int) -> np.ndar
 
 
 def run_grid(bars: Bars, tier: str, anchor_offset: int = 0,
-             min_bars: int = MIN_BARS_PER_QUARTER) -> dict[str, float]:
-    """Chạy cả sáu thống kê trên một lưới. Khoá dạng "<stat>.<đại lượng>"."""
+             min_bars: int = MIN_BARS_PER_QUARTER,
+             stats: dict | None = None) -> dict[str, float]:
+    """Chạy một bộ thống kê trên một lưới. Khoá dạng "<stat>.<đại lượng>".
+
+    `stats = None` dùng `STATS`, giữ hành vi Phase 1 **không đổi một bit**.
+    Phase 1b truyền dict biến thể của riêng nó (spec 1b §8).
+
+    Mặc định là `None` chứ không phải `STATS`: default khả biến là footgun —
+    một caller mutate nó sẽ đọc sang mọi caller khác.
+    """
     labels = label_quarters(bars.time, tier, anchor_offset)
     w = aggregate_cycles(bars, labels, min_bars)
+    table = STATS if stats is None else stats
     out: dict[str, float] = {}
-    for name, fn in STATS.items():
+    for name, fn in table.items():
         for key, value in fn(w).items():
             out[f"{name}.{key}"] = value
     return out
 
 
 def run_null(bars: Bars, tier: str, offsets: np.ndarray,
-             min_bars: int = MIN_BARS_PER_QUARTER) -> pd.DataFrame:
-    """Một dòng mỗi lưới null."""
+             min_bars: int = MIN_BARS_PER_QUARTER,
+             stats: dict | None = None) -> pd.DataFrame:
+    """Một dòng mỗi lưới null. `stats` truyền thẳng xuống `run_grid`."""
     rows = []
     for off in np.asarray(offsets, dtype="int64"):
         row = {"anchor_offset": int(off)}
-        row.update(run_grid(bars, tier, int(off), min_bars))
+        row.update(run_grid(bars, tier, int(off), min_bars, stats))
         rows.append(row)
     return pd.DataFrame(rows)
 
