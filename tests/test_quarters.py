@@ -7,18 +7,19 @@ from rsi_fvg.quarters import NY_TZ, label_quarters, server_to_ny, verify_server_
 
 
 def _offset_hours(epoch: int, ny_wall: str) -> float:
-    """Số giờ giữa giờ treo tường server (chính là epoch đọc như UTC) và giờ NY."""
-    server_wall = pd.to_datetime(epoch, unit="s")
-    return (server_wall - pd.Timestamp(ny_wall)).total_seconds() / 3600.0
+    """Số giờ giữa giờ UTC của epoch và giờ treo tường NY tương ứng."""
+    utc_wall = pd.to_datetime(epoch, unit="s")
+    return (utc_wall - pd.Timestamp(ny_wall)).total_seconds() / 3600.0
 
 
 @pytest.mark.parametrize("date_str,hh,want_offset", [
-    ("2026-01-15", 12, 7.0),    # giữa đông, cả hai vùng đều ngoài DST
-    ("2026-07-01", 12, 7.0),    # giữa hè, cả hai vùng đều trong DST
-    ("2026-03-10", 12, 6.0),    # Mỹ vào DST 08/03, EU phải chờ 29/03
-    ("2026-10-28", 12, 6.0),    # EU ra DST 25/10, Mỹ phải chờ 01/11
+    ("2026-01-15", 12, 5.0),    # giữa đông, EST
+    ("2026-03-07", 12, 5.0),    # ngay TRƯỚC khi Mỹ vào DST (08/03)
+    ("2026-03-09", 12, 4.0),    # ngay SAU khi Mỹ vào DST
+    ("2026-07-01", 12, 4.0),    # giữa hè, EDT
+    ("2026-11-03", 12, 5.0),    # sau khi Mỹ ra DST (01/11)
 ])
-def test_server_to_ny_offset_only_ever_6_or_7(date_str, hh, want_offset):
+def test_utc_to_ny_offset_only_ever_4_or_5(date_str, hh, want_offset):
     y, m, d = (int(x) for x in date_str.split("-"))
     e = epoch_for_ny(y, m, d, hh)
     assert _offset_hours(e, f"{date_str} {hh:02d}:00:00") == want_offset
@@ -26,14 +27,14 @@ def test_server_to_ny_offset_only_ever_6_or_7(date_str, hh, want_offset):
     assert got == pd.Timestamp(f"{date_str} {hh:02d}:00:00", tz=NY_TZ)
 
 
-def test_server_to_ny_never_yields_offset_8():
-    """Offset 8 đòi Athens giờ hè trong khi NY giờ đông — bất khả, xem spec §2."""
+def test_utc_to_ny_offset_never_anything_but_4_or_5():
+    """Epoch là UTC thật (spec §2), nên chỉ còn DST của phía New York."""
     days = pd.date_range("2026-01-01", "2026-12-31", freq="D")
     offs = set()
     for ts in days:
         e = epoch_for_ny(ts.year, ts.month, ts.day, 12)
         offs.add(_offset_hours(e, f"{ts.date()} 12:00:00"))
-    assert offs == {6.0, 7.0}
+    assert offs == {4.0, 5.0}
 
 
 def test_server_to_ny_is_tz_aware_new_york():
@@ -166,9 +167,15 @@ def test_label_quarters_rejects_unknown_tier():
         label_quarters(t, "micro")
 
 
-def test_label_quarters_correct_inside_dst_mismatch_window():
-    """10/03/2026 nằm trong cửa sổ offset 6 giờ. Nhãn vẫn phải theo giờ NY."""
-    e = epoch_for_ny(2026, 3, 10, 19, 30)
+@pytest.mark.parametrize("date_str", [
+    "2026-03-07",   # ngay trước khi Mỹ vào DST — offset 5
+    "2026-03-09",   # ngay sau — offset 4
+    "2026-11-03",   # sau khi Mỹ ra DST — offset 5 trở lại
+])
+def test_label_quarters_correct_across_us_dst_transitions(date_str):
+    """Nhãn phải theo giờ treo tường NY ở cả hai phía mỗi lần chuyển DST."""
+    y, m, d = (int(x) for x in date_str.split("-"))
+    e = epoch_for_ny(y, m, d, 19, 30)
     lab = label_quarters(np.array([e], dtype="int64"), "q90")
     assert lab.q_index[0] == 1
     assert lab.ny[0].hour == 19 and lab.ny[0].minute == 30

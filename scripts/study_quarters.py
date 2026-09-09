@@ -69,9 +69,10 @@ def gate_timezone(bars: Bars, bar_seconds: int) -> None:
     for note in chk.notes:
         print(f"  ghi chu: {note}")
     if not chk.ok:
-        print("\nFAIL: gia dinh 'dong ho server = EET' khong dung voi du lieu nay.")
-        print("Moi bien quarter la mot moc gio New York, nen nghien cuu se do sai")
-        print("hoan toan. Khong chay tiep. Xem spec section 2 va 3.2.")
+        print("\nFAIL: cach doc Bars.time khong khop du lieu nay.")
+        print("Moi bien quarter la mot moc gio New York, nen neu ngu nghia cua")
+        print("time da doi thi nghien cuu se do sai hoan toan. Khong chay tiep.")
+        print("Xem spec section 2 va 3.2, va docstring rsi_fvg/quarters.py.")
         sys.exit(1)
     print("  PASS\n")
 

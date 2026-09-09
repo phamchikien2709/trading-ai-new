@@ -19,25 +19,39 @@ Không nằm trong phạm vi: luật vào/ra, backtest P&L, tầng micro 22.5m /
 
 ---
 
-## 2. Vấn đề chặn đường: dữ liệu đang sai giờ
+## 2. Vấn đề chặn đường: phải convert sang giờ New York — và README nói sai về dữ liệu
 
-`Bars.time` là epoch seconds, nhưng loader **gán nhãn đồng hồ server của broker là UTC mà không convert** (README, mục "Timestamps"). Exness chạy EET/EEST (UTC+2/+3). README kết luận việc gán nhãn sai này vô hại vì "nothing in the backtest depends on wall-clock time — there is no session filter".
+Mọi biên quarter là một mốc **giờ treo tường New York**. Lệch một giờ nghĩa là backtest một lý thuyết khác. Với RSI2 và RSI-FVG chuyện này không thành vấn đề (không có session filter, không gì phụ thuộc giờ treo tường); với Quarterly Theory nó là tiền đề.
 
-**Kết luận đó đúng với RSI2 và RSI-FVG, và sai hoàn toàn với Quarterly Theory.** Mọi biên quarter là một mốc giờ treo tường New York. Lệch một giờ nghĩa là backtest một lý thuyết khác.
+### 2.1 Ghi chú "Timestamps" của README là sai
 
-Và lệch không phải hằng số. Offset server→NY bình thường là **7 giờ** (Athens UTC+3 với NY UTC−4 vào hè, UTC+2 với UTC−5 vào đông), nhưng rơi xuống **6 giờ** trong hai cửa sổ mỗi năm khi hai vùng đổi DST vào ngày khác nhau:
+README mục "Timestamps" viết `time` là đồng hồ server của broker được gán nhãn UTC mà không convert, và Exness chạy UTC+2/+3. **Ghi chú đó sai.** `Bars.time` là **instant UTC thật**. Bác bỏ bằng dữ liệu, không bằng lập luận:
 
-| Cửa sổ | Athens | New York | Offset |
-|---|---|---|---|
-| CN thứ 2 tháng 3 → CN cuối tháng 3 (~3 tuần) | EET, UTC+2 | EDT, UTC−4 | **6** |
-| CN cuối tháng 10 → CN đầu tháng 11 (~1 tuần) | EET, UTC+2 | EDT, UTC−4 | **6** |
-| còn lại | +2 hoặc +3 | −5 hoặc −4 | 7 |
+Khe nghỉ hằng ngày của XAUUSDc là một mốc **cố định** của broker, nên sau khi convert đúng nó phải rơi vào **một** giờ NY duy nhất. Trên 661.200 bar M5 (2017-04-27 → 2026-09-08):
 
-**Không tồn tại offset 8.** Offset 8 đòi Athens đang giờ hè (UTC+3) trong khi NY đang giờ đông (UTC−5), tức EU đã vào DST mà Mỹ thì chưa. Điều đó không bao giờ xảy ra: giai đoạn DST của EU (CN cuối tháng 3 → CN cuối tháng 10) nằm **hoàn toàn bên trong** giai đoạn DST của Mỹ (CN thứ 2 tháng 3 → CN đầu tháng 11). Trừ cứng −7 sẽ sai **~4 tuần mỗi năm**, luôn sai theo cùng một hướng và luôn đúng một giờ.
+| Cách đọc epoch | Giờ NY của khe nghỉ hằng ngày |
+|---|---|
+| Giờ treo tường Athens (điều README hàm ý) | 15:00 (1152 lần) · 16:00 (762 lần) — **chia đôi** |
+| **UTC thật** | **18:00 (1893 lần)** · 18:05 (158) · 19:00 (25) — **gộp một** |
 
-Cách đúng: epoch → naive datetime → gán `Europe/Athens` → convert `America/New_York`. `zoneinfo`/`pandas` xử lý cả hai chế độ DST.
+Trong giờ thô, khe đó xuất hiện ở 22:00 (1276 lần) và 23:00 (642 lần) — đúng cặp giá trị mà mốc 01:00 EET/EEST sinh ra khi đọc như UTC: 01:00 EEST = 22:00 UTC vào hè, 01:00 EET = 23:00 UTC vào đông. Và 1276 + 642 = 1918 ≈ 1893 + 25: hai giá trị thô **ánh xạ về cùng một giờ NY** dưới cách đọc UTC, về hai giờ khác nhau dưới cách đọc Athens. Một mốc cố định chỉ gộp được khi phép convert đúng.
 
-"Server Exness = EET" là **giả định lấy từ README, chưa từng kiểm**. §3.2 kiểm nó bằng dữ liệu, và nghiên cứu không được chạy nếu nó fail.
+`fetch_rates` chỉ lấy `time` thô của MT5 rồi `astype("int64")`, không convert gì. Nên bản thân giá trị MT5 trả về đã là instant UTC đúng, trái với điều README mô tả.
+
+### 2.2 Hệ quả: phép convert đơn giản, và chỉ còn DST của New York
+
+Cách đúng: `pd.to_datetime(epoch, unit="s").tz_localize("UTC").tz_convert("America/New_York")`.
+
+Vì UTC không có DST, không cần chính sách nào cho giờ lặp hay giờ mất. Phần DST duy nhất còn lại là phía New York, và offset UTC→NY chỉ nhận hai giá trị (đã kiểm bằng `zoneinfo` trên cả năm 2026):
+
+| Offset | Số ngày 2026 | Khoảng |
+|---|---|---|
+| 5 giờ (EST) | 127 | 01/01 → 07/03 và 01/11 → 31/12 |
+| 4 giờ (EDT) | 238 | 08/03 → 31/10 |
+
+### 2.3 Giả định vẫn phải kiểm bằng dữ liệu
+
+Kết luận §2.1 rút ra từ chính bộ dữ liệu này. §3.2 biến nó thành **cổng chặn chạy mỗi lần**, để nếu một lần fetch sau này đổi ngữ nghĩa `time` thì nghiên cứu dừng thay vì âm thầm đo sai.
 
 ---
 
@@ -47,21 +61,25 @@ Hàm thuần, không I/O, không state. Đây là module Phase 2 sẽ dùng lạ
 
 ### 3.1 `server_to_ny(epoch: np.ndarray) -> pd.DatetimeIndex`
 
-`pd.to_datetime(epoch, unit="s")` → `.tz_localize("Europe/Athens")` → `.tz_convert("America/New_York")`.
+`pd.to_datetime(epoch, unit="s")` → `.tz_localize("UTC")` → `.tz_convert("America/New_York")`.
 
-Chính sách cho giờ ambiguous (giờ lặp khi fall-back) và nonexistent (giờ mất khi spring-forward): **raise, không vá**. DST của EU đổi lúc 03:00 Chủ nhật, nằm giữa lúc thị trường đóng, nên lẽ ra không có bar nào rơi vào đó. Nếu nó raise thật, đó là **phát hiện về dữ liệu** cần điều tra, không phải lỗi cần bọc `try`. Bọc lại sẽ che mất đúng thứ đáng biết.
+**Không cần chính sách cho giờ ambiguous hay nonexistent.** UTC không có DST nên `tz_localize("UTC")` không bao giờ nhập nhằng, và `tz_convert` từ một instant tuyệt đối sang New York luôn xác định. Bản thiết kế đầu localize vào `Europe/Athens` và phải xử lý giờ lặp / giờ mất của DST châu Âu; cả lớp vấn đề đó biến mất cùng với giả định sai ở §2.1.
 
 ### 3.2 `verify_server_tz(bars: Bars) -> TzCheck` — cổng chặn, chạy trước mọi thứ
 
 Hai kiểm định độc lập, đều suy ra từ dữ liệu:
 
-**Kiểm định 1 — mở cửa đầu tuần.** Tìm mọi khe cuối tuần (`diff(time) > 24*3600`). Với mỗi khe, lấy giờ NY của bar đầu tiên sau khe. Vàng/forex mở **Chủ nhật 17:00–18:00 New York**. Giá trị mode phải là **Chủ nhật, trong khoảng 17:00–18:00 NY**. Ra 16:00 hay 19:00 ⇒ offset lệch một giờ ⇒ fail.
+**Kiểm định 1 — mở cửa đầu tuần (CHẶN).** Tìm mọi khe cuối tuần (`diff(time) > 24*3600`). Với mỗi khe, lấy giờ NY của bar đầu tiên sau khe. Vàng/forex mở **Chủ nhật 17:00–18:00 New York**. Fail nếu mode không phải Chủ nhật trong khoảng giờ đó.
 
-**Kiểm định 2 — nghỉ hằng ngày.** XAUUSD của Exness có khe bảo trì 00:00–01:00 EET. Convert đúng thì khe đó phải xuất hiện lặp lại ở **17:00–18:00 NY mỗi ngày trong tuần**. Tìm khe trong ngày (`diff(time)` lớn hơn bar interval nhưng nhỏ hơn 24h) và kiểm phân phối giờ NY của chúng.
+**Kiểm định 2 — nghỉ hằng ngày (BỔ TRỢ).** XAUUSDc có khe bảo trì kết thúc 01:00 giờ server = **18:00 NY**. Tìm khe trong ngày (`diff(time)` lớn hơn bar interval nhưng nhỏ hơn 24h) và kiểm giờ NY của chúng. Kiểm định này **không chặn một mình khi không tìm thấy khe nào** — tài khoản có thể không có phiên nghỉ, và chặn oan sẽ khoá cả nghiên cứu vì một thứ chỉ mang tính xác nhận.
 
-Trả về dataclass: giá trị mode của từng kiểm định, số đếm, và một cờ `ok`. `scripts/study_quarters.py` **thoát với mã khác 0 và không chạy nghiên cứu** khi `ok` là false.
+**Quyết định theo (thứ, GIỜ), không theo chuỗi khớp chính xác.** Bar đầu tiên sau khe thường lệch vài phút: dữ liệu thật cho `Sun 18:05` (204 lần) nhiều hơn `Sun 18:00` (62 lần), vì nến đúng mốc 18:00 không luôn tồn tại. Khớp chuỗi sẽ fail vì phút lẻ — một lý do không liên quan gì tới timezone. Mode có phút vẫn được báo ra để đọc, nhưng cờ `ok` tính từ mode của cặp (thứ, giờ).
 
-**Ghi chú đáng lưu ý cho §8:** khe nghỉ hằng ngày kết thúc **18:00 NY**, trùng đúng mốc neo chu kỳ ngày của Quarterly Theory. Đây vừa là kiểm định tốt, vừa là một confound — xem §8.
+Trả về dataclass: mode và phân phối của từng kiểm định, `weekly_ok`, `daily_ok`, `ok`, và `notes`. `scripts/study_quarters.py` **thoát với mã 1 và không chạy nghiên cứu** khi `ok` là false.
+
+**Kết quả thật trên XAUUSDc M5:** `weekly='Sun 18:05'` ok, `daily='18:00'` ok, `ok=True`.
+
+**Ghi chú đáng lưu ý cho §8:** khe nghỉ hằng ngày kết thúc **18:00 NY**, trùng đúng mốc neo chu kỳ ngày của Quarterly Theory. Đây vừa là kiểm định tốt, vừa là một confound đã được **xác nhận bằng dữ liệu** — xem §8.2.
 
 ### 3.3 `label_quarters(ny: pd.DatetimeIndex, tier: str, anchor_offset: int = 0)`
 
@@ -133,7 +151,7 @@ Ghi vào `results/quarters_study/<YYYY-MM-DD>/`:
 Khác hẳn phần Pine của Phase trước: **đây là code test được thật**, hàm thuần, `pytest` chạy được. TDD áp dụng đúng nghĩa.
 
 1. **Bảng mốc giờ NY → chỉ số quarter.** Dùng lại bảng đã kiểm tay khi làm indicator Pine (spec kia §8 và plan Task 1): 18:00→(0,0), 19:30→(0,1), 23:59→(0,3), 00:00→(1,0), 01:30→(1,1), 06:00→(2,0), 07:30→(2,1), 12:00→(3,0), 13:30→(3,1), 17:59→(3,3).
-2. **DST lệch EU/Mỹ — cả hai cửa sổ đều cho offset 6.** Timestamp ngày **2026-03-10** (Mỹ vào DST 08/03, EU chưa tới 29/03): offset server→NY phải là **6 giờ**, không phải 7. Timestamp ngày **2026-10-28** (EU ra DST 25/10, Mỹ chưa tới 01/11): cũng phải là **6**. Thêm một mốc giữa hè (2026-07-01) và một mốc giữa đông (2026-01-15) để chốt offset **7** ở trạng thái bình thường. Test phải khẳng định **không mốc nào cho offset 8** — xem §2 về lý do 8 là bất khả.
+2. **DST phía New York — offset UTC→NY chỉ nhận 4 hoặc 5.** Kẹp hai lần chuyển: **2026-03-07** (trước khi Mỹ vào DST) phải cho **5**, **2026-03-09** (sau) phải cho **4**; **2026-11-03** (sau khi Mỹ ra DST) phải cho **5** trở lại. Thêm 2026-01-15 (**5**) và 2026-07-01 (**4**) làm mốc bình thường. Một test quét cả năm 2026 phải khẳng định tập offset đúng bằng `{4, 5}` — không có giá trị nào khác. Nhãn quarter cũng phải đúng ở cả hai phía mỗi lần chuyển.
 3. **`trading_day` qua nửa đêm — chỗ dễ cài sai nhất.** Bar lúc 23:00 NY ngày `D` và bar lúc 01:00 NY ngày `D+1` phải cho **cùng một `trading_day` = `D`**, vì cả hai thuộc chu kỳ khởi đầu 18:00 ngày `D`. Bar 23:00 lấy ngày của chính nó (giờ ≥ 18); bar 01:00 lấy ngày trước (giờ < 18). Cùng chu kỳ, `q_index` khác nhau: 0 và 1. Test cả `trading_day` bằng nhau **và** `q_index` khác nhau — chỉ test một trong hai sẽ không bắt được lỗi lệch ngày.
 4. **`anchor_offset` dịch biên đúng lượng truyền vào.** Gán nhãn với `offset = 5400` phải cho `q_index` bằng đúng nhãn của `offset = 0` dịch đi một quarter ở tầng q90.
 5. **`server_to_ny` raise** trên timestamp nonexistent và ambiguous tổng hợp (không lấy từ dữ liệu thật).
@@ -170,9 +188,9 @@ Phần này tồn tại để ngăn cả tôi và bạn hợp lý hoá kết qu�
 ## 8. Giới hạn đã biết
 
 1. **Đo hiệp hội, không đo lợi nhuận.** ⑥ có percentile cao **không** đảm bảo strategy có lãi. Spread XAUUSDc trong `config/default.yaml` là 260 points = 0,26 USD; một edge nhỏ hơn spread là vô dụng dù thống kê có ý nghĩa đến đâu. Nghiên cứu này **không** tính cost.
-2. **Confound của mốc 18:00.** §3.2 kiểm định 2 cho thấy khe nghỉ hằng ngày của broker kết thúc đúng 18:00 NY — trùng mốc neo chu kỳ ngày. Nếu lưới thật hơn lưới giả ở tầng session, một phần hoặc toàn bộ hiệu ứng có thể đến từ **microstructure của việc mở lại sau nghỉ** (spread rộng, thanh khoản mỏng, gap) chứ không từ "algorithmic delivery" mà lý thuyết mô tả. Nghiên cứu này không tách được hai nguyên nhân đó. Tầng q90 ít bị confound này hơn vì chỉ 1 trong 16 biên mỗi ngày trùng mốc mở lại.
+2. **Confound của mốc 18:00 — ĐÃ XÁC NHẬN BẰNG DỮ LIỆU, không còn là suy đoán.** §3.2 kiểm định 2 trên 661.200 bar M5 cho khe nghỉ hằng ngày của broker kết thúc **18:00 NY, 1893 lần** — trùng khít mốc neo chu kỳ ngày của lý thuyết. Nếu lưới thật hơn lưới giả ở tầng session, một phần hoặc toàn bộ hiệu ứng có thể đến từ **microstructure của việc mở lại sau nghỉ** (spread rộng, thanh khoản mỏng, gap qua khe) chứ không từ "algorithmic delivery" mà lý thuyết mô tả. Nghiên cứu này **không tách được** hai nguyên nhân đó, và đây là giới hạn nghiêm trọng nhất của cả Phase 1. Tầng q90 ít bị hơn: chỉ 1 trong 16 biên mỗi ngày trùng mốc mở lại. Khi đọc kết quả, coi tầng q90 là bằng chứng đáng tin hơn tầng session.
 3. **Null model kiểm đúng một điều hẹp:** "lưới neo 18:00 có đặc biệt so với lưới neo lệch". Nó **không** kiểm "giá có dự báo được".
 4. **Một symbol, một broker, một khoảng thời gian.** Không có bằng chứng nào về việc kết quả chuyển sang symbol khác hay broker khác.
-5. **Giả định EET chỉ được kiểm ở hiện tại.** §3.2 kiểm offset trên toàn bộ dữ liệu, nhưng nếu broker từng **đổi timezone server** trong 9 năm lịch sử thì kiểm định mode vẫn pass trong khi một đoạn dữ liệu bị lệch. Kiểm định 1 báo phân phối chứ không chỉ mode, nên bất thường sẽ lộ ra — nhưng không có cơ chế tự động phát hiện thời điểm đổi.
+5. **Cổng chặn kiểm bằng mode, nên một đoạn lệch có thể lọt.** §3.2 xét toàn bộ dữ liệu nhưng quyết định bằng giá trị mode. Nếu ngữ nghĩa `time` từng **đổi giữa lịch sử 9 năm** — broker đổi timezone server, hoặc một phần cache được ghi bởi phiên bản loader khác — thì mode vẫn pass trong khi một đoạn bị lệch. Cổng báo cả phân phối chứ không chỉ mode nên bất thường sẽ lộ ra khi đọc, nhưng **không có cơ chế tự động phát hiện thời điểm đổi**. Đây là rủi ro thật, không giả định: chính ghi chú README từng mô tả sai ngữ nghĩa `time` (§2.1), nên tài liệu về bộ dữ liệu này đã có tiền lệ không đáng tin.
 6. **Tầng micro 22.5m bị loại** khỏi nghiên cứu: 64 quarter mỗi ngày trên M1, mỗi quarter vài nến, nhiễu áp đảo.
 7. **Không sinh tín hiệu, không chạy engine.** Nghiên cứu này không nạp `rsi_fvg/backtest/` và không tạo `Signal` nào.

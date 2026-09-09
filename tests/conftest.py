@@ -40,13 +40,12 @@ def bars_from_closes(closes, wick=0.5, start=1_700_000_000, step=300):
 def epoch_for_ny(y, m, d, hh, mm=0, ss=0):
     """Epoch seconds mà server_to_ny sẽ đọc thành đúng giờ New York này.
 
-    Loader gán nhãn giờ treo tường của server là UTC (README, "Timestamps").
-    Nên đường đi ngược là: giờ NY -> giờ treo tường Athens -> bỏ tz -> coi như UTC.
+    `Bars.time` là instant UTC thật — đã kiểm bằng dữ liệu, xem
+    rsi_fvg/quarters.py và spec §2. Nên đường đi ngược chỉ là: giờ NY -> UTC.
     """
     ny = pd.Timestamp(year=y, month=m, day=d, hour=hh, minute=mm, second=ss,
                       tz="America/New_York")
-    server_wall = ny.tz_convert("Europe/Athens").tz_localize(None)
-    return int(server_wall.value // 1_000_000_000)
+    return int(ny.timestamp())
 
 
 @pytest.fixture

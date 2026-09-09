@@ -2,15 +2,27 @@
 
 Spec: docs/superpowers/specs/2026-09-09-quarterly-theory-premise-study-design.md §3.
 
-Bars.time là đồng hồ server của broker được gán nhãn UTC mà KHÔNG convert
-(README, mục "Timestamps"). Exness chạy EET/EEST. Với RSI2 và RSI-FVG việc gán
-nhãn sai này vô hại vì không có gì trong backtest phụ thuộc giờ treo tường; với
-Quarterly Theory thì mọi biên quarter LÀ một mốc giờ New York, nên lệch một giờ
-là đo một lý thuyết khác.
+Mọi biên quarter LÀ một mốc giờ treo tường New York, nên `Bars.time` phải được
+convert đúng sang giờ NY; lệch một giờ là đo một lý thuyết khác.
 
-Offset server->NY chỉ nhận hai giá trị: 7 giờ (bình thường) và 6 giờ (~28 ngày
-mỗi năm, khi Mỹ đã vào DST mà EU chưa, hoặc EU đã ra mà Mỹ chưa). Không tồn tại
-8 giờ — giai đoạn DST của EU nằm hoàn toàn bên trong giai đoạn của Mỹ.
+`Bars.time` là instant **UTC thật**. Điều này TRÁI với ghi chú "Timestamps" của
+README, vốn nói `time` là đồng hồ server của broker được gán nhãn UTC mà không
+convert. Ghi chú đó sai, và đã được bác bỏ bằng dữ liệu:
+
+  Khe nghỉ hằng ngày của XAUUSDc (một mốc CỐ ĐỊNH của broker) xuất hiện ở hai
+  giờ thô khác nhau: 22:00 (1276 lần) và 23:00 (642 lần). Đó đúng là cặp giá trị
+  mà mốc 01:00 EET/EEST sinh ra khi đọc như UTC — 01:00 EEST = 22:00 UTC vào hè,
+  01:00 EET = 23:00 UTC vào đông. Đọc epoch là UTC rồi convert sang NY thì hai
+  giá trị đó GỘP thành một: 18:00 NY, 1893 lần (1276 + 642 = 1918 ~ 1893 + 25).
+  Đọc epoch là giờ treo tường Athens thì chúng CHIA ĐÔI thành 15:00 và 16:00.
+  Một mốc cố định của broker chỉ gộp được khi phép convert đúng.
+
+Vì epoch là UTC, phần DST duy nhất còn lại là phía New York: offset UTC->NY chỉ
+nhận 5 giờ (EST) hoặc 4 giờ (EDT).
+
+Ghi chú cho spec §8.2: khe nghỉ hằng ngày kết thúc đúng 18:00 NY, TRÙNG KHÍT mốc
+neo chu kỳ ngày của lý thuyết. Confound này giờ đã được xác nhận bằng dữ liệu
+thật, không còn là suy đoán.
 """
 from __future__ import annotations
 
@@ -19,33 +31,38 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-SERVER_TZ = "Europe/Athens"      # EET/EEST, khớp ghi chú README về đồng hồ Exness
+SOURCE_TZ = "UTC"                # Bars.time la instant UTC that, xem docstring
 NY_TZ = "America/New_York"
 WEEK_GAP_SECONDS = 86400
 
 
 def server_to_ny(epoch: np.ndarray) -> pd.DatetimeIndex:
-    """epoch seconds (giờ server gán nhãn UTC) -> DatetimeIndex tz-aware giờ NY.
+    """epoch seconds (UTC thật) -> DatetimeIndex tz-aware giờ New York.
 
-    ambiguous="raise" và nonexistent="raise" là CÓ Ý, không phải mặc định bỏ quên:
-    DST của EU đổi lúc 03:00 Chủ nhật, giữa lúc thị trường đóng, nên lẽ ra không
-    bar nào rơi vào giờ lặp hay giờ mất. Nếu nó raise thật thì đó là phát hiện về
-    dữ liệu cần điều tra, không phải lỗi cần bọc try — bọc lại sẽ che đúng thứ
-    đáng biết.
+    Không cần chính sách cho giờ ambiguous hay nonexistent: UTC không có DST nên
+    `tz_localize("UTC")` không bao giờ nhập nhằng, và `tz_convert` từ một instant
+    tuyệt đối sang New York luôn xác định. Phiên bản trước của hàm này localize
+    vào Europe/Athens và phải xử lý giờ lặp/giờ mất của DST châu Âu — cả vấn đề
+    đó biến mất cùng với giả định sai.
     """
     naive = pd.to_datetime(np.asarray(epoch, dtype="int64"), unit="s")
-    return naive.tz_localize(SERVER_TZ, ambiguous="raise",
-                             nonexistent="raise").tz_convert(NY_TZ)
+    return naive.tz_localize(SOURCE_TZ).tz_convert(NY_TZ)
 
 
 # Nhãn thứ trong tuần tự viết, KHÔNG dùng strftime("%a"): %a phụ thuộc locale của
 # máy và repo này chạy trên Windows tiếng Việt.
 DOW = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
-# Vàng/forex mở Chủ nhật 17:00-18:00 NY; khe nghỉ hằng ngày của Exness
-# (00:00-01:00 EET) kết thúc trong cùng cửa sổ đó tính theo giờ NY.
-WEEKLY_OPEN_OK = ("Sun 17:00", "Sun 17:30", "Sun 18:00")
-DAILY_GAP_END_OK = ("17:00", "17:30", "18:00")
+# Vàng/forex mở Chủ nhật 17:00-18:00 NY; khe nghỉ hằng ngày của Exness kết thúc
+# trong cùng cửa sổ đó tính theo giờ NY.
+#
+# Kiểm theo (thứ, GIỜ) chứ không theo chuỗi khớp chính xác: bar đầu tiên sau khe
+# thường lệch vài phút (dữ liệu thật cho "Sun 18:05" nhiều hơn "Sun 18:00", vì
+# nến đúng mốc 18:00 không luôn tồn tại). Khớp chuỗi sẽ fail vì phút lẻ, một lý
+# do không liên quan gì tới timezone.
+WEEKLY_OPEN_OK_DOW = 6           # Chủ nhật (Mon=0)
+WEEKLY_OPEN_OK_HOURS = (17, 18)
+DAILY_GAP_END_OK_HOURS = (17, 18)
 
 
 @dataclass(frozen=True)
@@ -61,7 +78,11 @@ class TzCheck:
 
 
 def verify_server_tz(time: np.ndarray, bar_seconds: int) -> TzCheck:
-    """Kiểm giả định "đồng hồ server = EET" bằng dữ liệu, không bằng niềm tin.
+    """Kiểm bằng dữ liệu rằng cách đọc `time` đang đúng, không tin vào tài liệu.
+
+    Ghi chú README từng mô tả sai ngữ nghĩa `time` (xem docstring module), nên
+    hàm này tồn tại để nếu một lần fetch sau này đổi ngữ nghĩa đó thì nghiên cứu
+    DỪNG thay vì âm thầm đo sai.
 
     Kiểm định 1 (CHẶN): giờ NY của bar đầu tiên sau mỗi khe cuối tuần. Thị trường
     mở Chủ nhật 17:00-18:00 NY, nên mode phải nằm trong cửa sổ đó.
@@ -91,6 +112,7 @@ def verify_server_tz(time: np.ndarray, bar_seconds: int) -> TzCheck:
     daily_idx = after[gap <= WEEK_GAP_SECONDS]
 
     def labels(idx: np.ndarray, with_dow: bool) -> dict[str, int]:
+        """Đếm theo nhãn có phút — chỉ để BÁO CÁO, không để quyết định."""
         if idx.size == 0:
             return {}
         sub = ny[idx]
@@ -101,19 +123,32 @@ def verify_server_tz(time: np.ndarray, bar_seconds: int) -> TzCheck:
         vc = pd.Series(out).value_counts()
         return {str(k): int(v) for k, v in vc.items()}
 
+    def modal_dow_hour(idx: np.ndarray) -> tuple[int, int] | None:
+        """Mode theo (thứ, giờ) — bất biến với phút. Đây là cái để QUYẾT ĐỊNH."""
+        if idx.size == 0:
+            return None
+        sub = ny[idx]
+        pairs = list(zip(sub.dayofweek.tolist(), sub.hour.tolist()))
+        return pd.Series(pairs).value_counts().index[0]
+
     w_counts = labels(weekly_idx, True)
     d_counts = labels(daily_idx, False)
     w_mode = next(iter(w_counts), "")
     d_mode = next(iter(d_counts), "")
 
-    weekly_ok = w_mode in WEEKLY_OPEN_OK
-    daily_ok = (d_mode == "") or (d_mode in DAILY_GAP_END_OK)
+    w_pair = modal_dow_hour(weekly_idx)
+    d_pair = modal_dow_hour(daily_idx)
+    weekly_ok = (w_pair is not None and w_pair[0] == WEEKLY_OPEN_OK_DOW
+                 and w_pair[1] in WEEKLY_OPEN_OK_HOURS)
+    daily_ok = (d_pair is None) or (d_pair[1] in DAILY_GAP_END_OK_HOURS)
     if not weekly_ok:
-        notes.append(f"mo dau tuan mode={w_mode!r}, ngoai cua so {WEEKLY_OPEN_OK}")
-    if d_mode == "":
+        notes.append(f"mo dau tuan mode={w_mode!r}, can Chu nhat gio "
+                     f"{WEEKLY_OPEN_OK_HOURS}")
+    if d_pair is None:
         notes.append("khong co khe trong ngay: kiem dinh 2 pass rong")
     elif not daily_ok:
-        notes.append(f"ket khe hang ngay mode={d_mode!r}, ngoai cua so {DAILY_GAP_END_OK}")
+        notes.append(f"ket khe hang ngay mode={d_mode!r}, can gio "
+                     f"{DAILY_GAP_END_OK_HOURS}")
     return TzCheck(w_mode, w_counts, d_mode, d_counts,
                    weekly_ok, daily_ok, weekly_ok and daily_ok, tuple(notes))
 
