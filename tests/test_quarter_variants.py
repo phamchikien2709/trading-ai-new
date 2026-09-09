@@ -3,6 +3,7 @@ import pandas as pd
 import pytest
 
 from conftest import epoch_for_ny, make_bars
+from rsi_fvg.quarter_stats import make_offsets
 from rsi_fvg.quarter_variants import (DIRECT_VARIANT, PRIMARY_TIER, SCREEN_VARIANTS,
                                       TRAILING_WINDOW, VARIANTS, base_trigger, confirm,
                                       pick_winner, pooled, q3_dir, screen, split_halves,
@@ -372,3 +373,76 @@ def test_verdict_text_says_quarterly_theory_is_closed_when_nothing_passes():
          "n_nulls": 69, "beat_all_nulls": False}
     _, text = verdict(a, b)
     assert "dong lai" in text and "Phase 1c" in text
+
+
+def test_screen_returns_four_variants_with_correct_columns():
+    """Test end-to-end screen() against real synthetic Bars.
+
+    Xay dung toi thieu 25 chu ky q90 (khoang 7 ngay, ~2000 M5 bar) de V2 co
+    du cua so truot 20 chu ky moi phan loai duoc. Dung time array ro rang.
+    Gia co bien dong de variant chon duoc chu ky thay cho loai het.
+    """
+    n_bars = 2000
+    base = epoch_for_ny(2026, 6, 1, 18)
+
+    # Tao gia voi mau lua chon (deterministik, khong dung randomness).
+    o = [(100.0 + (i % 10)) for i in range(n_bars)]
+    h = [(o_val + 2.0) for o_val in o]
+    l = [(o_val - 2.0) for o_val in o]
+    c = [(o_val + 1.0) for o_val in o]
+
+    bars = make_bars(o, h, l, c)
+    bars.time = np.arange(base, base + 300 * n_bars, 300, dtype="int64")
+
+    # Tao offset nho de chay nhanh (5 offset, seed=1).
+    offsets = make_offsets("q90", 300, 5, seed=1)
+    assert offsets.size > 0
+
+    # Run screen.
+    result = screen(bars, "q90", offsets)
+
+    # Kiem tra: 4 dong (V2, V3, V4, V5).
+    assert len(result) == 4
+
+    # Kiem tra: dung cac cot required.
+    assert set(result.columns) == {"variant", "real", "n", "percentile"}
+
+    # Kiem tra: variant theo thu tu, neu f"{name}.p" sai thi raise KeyError.
+    assert list(result["variant"]) == list(SCREEN_VARIANTS)
+
+
+def test_confirm_returns_dict_with_required_keys_and_bool_flag():
+    """Test end-to-end confirm() against real synthetic Bars.
+
+    Kiem tra confirm tra ve dict co dung 6 khoa va beat_all_nulls la bool
+    (khong phai numpy bool hay None), vi logic quyet dinh o task sau branch tren.
+    """
+    n_bars = 2000
+    base = epoch_for_ny(2026, 6, 1, 18)
+
+    # Tao gia voi mau lua chon (deterministik).
+    o = [(100.0 + (i % 10)) for i in range(n_bars)]
+    h = [(o_val + 2.0) for o_val in o]
+    l = [(o_val - 2.0) for o_val in o]
+    c = [(o_val + 1.0) for o_val in o]
+
+    bars = make_bars(o, h, l, c)
+    bars.time = np.arange(base, base + 300 * n_bars, 300, dtype="int64")
+
+    # Tao offset.
+    offsets = make_offsets("q90", 300, 5, seed=1)
+    assert offsets.size > 0
+
+    # Run confirm cho V1.
+    result = confirm(bars, "q90", offsets, "V1")
+
+    # Kiem tra: dung 6 khoa.
+    assert set(result.keys()) == {"variant", "real", "n", "percentile", "n_nulls",
+                                  "beat_all_nulls"}
+
+    # Kiem tra: variant la "V1".
+    assert result["variant"] == "V1"
+
+    # Kiem tra: beat_all_nulls la bool that (khong phai numpy.bool_).
+    assert isinstance(result["beat_all_nulls"], bool)
+    assert not isinstance(result["beat_all_nulls"], np.bool_)
