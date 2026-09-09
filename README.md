@@ -7,6 +7,14 @@ Two XAUUSD strategies share one backtest core:
 
 Specs: `docs/superpowers/specs/`. Plans: `docs/superpowers/plans/`.
 
+## Quarterly Theory — nghiên cứu tiền đề
+
+    python scripts/study_quarters.py --tf M5      # -> results/quarters_study/<ngày>/
+
+Đo xem lưới thời gian của Quarterly Theory (ICT) có cấu trúc thật trên XAUUSDc hay chỉ là hình học của việc chia bốn: sáu phép đo, mỗi phép so với tối đa 200 lưới neo lệch (anchor-shift permutation). `rsi_fvg/quarters.py` convert epoch sang giờ New York — **bắt buộc với lý thuyết này**, vì mọi biên quarter là một mốc giờ NY; module đó cũng mang bằng chứng cho việc `time` là UTC thật (xem mục Timestamps). Script chạy một cổng chặn kiểm cách đọc `time` bằng dữ liệu và thoát 1 nếu fail.
+
+**Kết quả chạy 2026-09-09 (661.200 bar M5, 2017-04 → 2026-09): tiền đề KHÔNG đứng.** Thống kê quyết định — sau khi Q2 sweep range Q1 rồi đóng lại bên trong, Q3 có đi ngược hướng sweep — ra **0,473** ở tầng session và **0,485** ở tầng 90 phút, tức **dưới mức tung đồng xu**, và nằm ở **percentile 3** của phân phối null. Theo luật chốt trước trong spec §7, Phase 2 (strategy) **không được phép** viết spec. Chi tiết và các phát hiện phụ: `results/quarters_study/2026-09-09/summary.md`, spec `docs/superpowers/specs/2026-09-09-quarterly-theory-premise-study-design.md`.
+
 ## Setup (Windows, Python 3.13)
 
     pip install -r requirements.txt
