@@ -38,7 +38,12 @@ Sáu slot của một ngày giao dịch, đánh số theo thứ tự thời gian
 | 4 | 09:00–13:00 | | London + NY chồng nhau |
 | 5 | 13:00–17:00 | "cây mở 1h" (mùa đông) | **cây A** — đóng đúng mốc đóng ngày |
 
-Ngày giao dịch chạy 17:00 → 17:00 NY. Mốc này trùng khít cả **khe nghỉ hằng ngày** (đo được: 17:00→18:00 NY, 2290 lần trên M1) lẫn **biên tuần** (thị trường đóng 17:00 NY thứ Sáu, mở lại 17:00–18:00 NY Chủ nhật). Đó là một sự tiện lợi, và đồng thời là confound của §5.2.
+Ngày giao dịch chạy 17:00 → 17:00 NY. Mốc này trùng khít cả **khe nghỉ hằng ngày** lẫn **biên tuần**, cả hai đều đo được trên M1:
+
+- Khe nghỉ hằng ngày: **17:00 → 18:00 NY**, 2.290 lần. Bar cuối trước khe ở giờ 16 (81,8%), bar đầu sau khe ở giờ 18 (91,1%).
+- Biên tuần: đóng **17:00 NY thứ Sáu** (92% trong 331 khe cuối tuần sạch, bar cuối ở 16:57–16:59), mở lại **18:00 NY Chủ nhật** (81%). Khe cuối tuần bình thường dài **49 giờ**.
+
+Đó là một sự tiện lợi, và đồng thời là confound của §5.2.
 
 ### 2.2 Số thật của lưới, đo trên XAUUSDc M1
 
@@ -226,8 +231,26 @@ Hệ quả bắt buộc: kết luận của nghiên cứu này **không** phân 
 
 Cổng chặn `detect_source_tz(time, bar_seconds) -> TzDetect`:
 - Ứng viên: offset nguyên giờ từ −12 đến +14, cộng các zone có tên `UTC`, `America/New_York`, `Europe/Athens`.
-- Chấm điểm mỗi ứng viên bằng **tỉ lệ** bar-đầu-sau-khe-cuối-tuần rơi vào Chủ nhật 17:00–18:00 NY. Chấm bằng tỉ lệ chứ không bằng mode: mode ẩn mất chuyện một đoạn lịch sử bị lệch, và đó chính là lỗ hổng đã ghi ở §8 mục 5 spec Quarterly Theory Phase 1.
-- Đi tiếp **chỉ khi** điểm tốt nhất `>= 0.9` **và** cách ứng viên nhì `>= 0.15`. Ngược lại: **in toàn bộ bảng điểm rồi thoát 1**, không chạy nghiên cứu.
+- **Tiêu chí là khe nghỉ hằng ngày, không phải mốc mở tuần.** Điểm của một ứng viên:
+
+  ```
+  score = 0.5 · P(bar cuối trước mỗi khe trong ngày rơi vào giờ 16 NY)
+        + 0.5 · P(bar đầu sau mỗi khe trong ngày rơi vào giờ 18 NY)
+  ```
+
+  Khe nghỉ là 17:00→18:00 NY, nên cách đọc đúng đẩy hai đầu về giờ 16 và giờ 18.
+
+  Chọn tiêu chí này sau khi **đo cả hai** trên 3.299.723 bar M1. Mốc mở tuần cho mẫu 331 khe sạch và chỉ 81% rơi vào giờ kỳ vọng, lại cần cửa sổ hai giờ rộng nên offset lệch ±1h vẫn lọt qua — phân biệt kém. Khe nghỉ hằng ngày cho **2.290** mẫu và phân biệt dứt khoát:
+
+  ```
+  đọc đúng   0,8644        lệch −1h  0,0020        lệch +1h  0,0155
+                           lệch −2h  0,0094        lệch +2h  0,0181
+  ```
+
+- Chấm bằng **tỉ lệ** chứ không bằng mode: mode ẩn mất chuyện một đoạn lịch sử bị lệch, và đó chính là lỗ hổng đã ghi ở §8 mục 5 spec Quarterly Theory Phase 1.
+- Đi tiếp **chỉ khi** điểm tốt nhất `>= 0.70` **và** cách ứng viên nhì `>= 0.30`. Ngược lại: **in toàn bộ bảng điểm rồi thoát 1**, không chạy nghiên cứu.
+
+  Ngưỡng 0,70 chứ không phải 0,90 vì cách đọc **đúng** trên dữ liệu thật chỉ đạt 0,8644 — ngày lễ rút ngắn và tuần khởi động muộn ăn vào phần còn lại. Đặt 0,90 là tự chặn chính mình. Biên 0,30 an toàn rộng rãi vì khoảng cách thật giữa đúng và lệch là 0,86 so với 0,02.
 - Nếu ứng viên offset nguyên giờ tốt nhất bị **chia đôi giữa hai giờ** (dấu hiệu nguồn có DST — đúng hiện tượng đã gặp với Exness), zone có tên sẽ thắng; cổng in ra rằng nó thắng và thắng vì lý do gì.
 - Kết quả dò được in **thật to** trong báo cáo. Một nghiên cứu phụ thuộc giờ treo tường mà không nói nó đã đọc giờ thế nào là một nghiên cứu không kiểm chứng được.
 
@@ -330,3 +353,4 @@ Phần này tồn tại để ngăn cả tôi và người dùng hợp lý hoá 
 7. **Null yếu trên H1**: chỉ 24 mốc neo khả dụng (§5.1). Percentile tính trên 24 điểm thì thô; `n_nulls` được báo ra.
 8. **Một symbol, một khoảng thời gian.** Không có bằng chứng nào về việc kết quả chuyển sang symbol khác.
 9. **Đơn vị USD gộp cả mẫu bị 2025–2026 chi phối** (§2.3b). Chỉ dùng dạng chia `day_atr` hoặc dạng tách theo năm để quyết định bất cứ điều gì.
+10. **Dữ liệu XAUUSDc có 163 bar Thứ Bảy lạc** (2018–2021, đúng 19:00 hoặc 20:00 NY, khoảng một bar mỗi tuần). Thị trường không mở Thứ Bảy, nên đây là dị thường của feed. Hệ quả đã kiểm: chúng chia 22% khe cuối tuần thành 27h + 22h thay vì một khe 49h — nên **mọi phép đếm khe cuối tuần trên bộ dữ liệu này đều không đáng tin**, và đó là lý do thứ hai để cổng §6.1 dùng khe nghỉ hằng ngày. Với lưới H4, mỗi bar lạc sinh ra một "ngày giao dịch" Thứ Bảy chỉ có 1–2 bar ở slot 0, và luật loại §3.3.1 xoá nó tự động. Nhưng nó nằm **giữa** thứ Sáu và ngày giao dịch thật kế tiếp, nên định nghĩa "ngày kế tiếp" của cửa sổ ① slot 5 phải là **ngày giao dịch còn sống kế tiếp**, không phải ngày lịch kế tiếp — nếu không, 163 dòng slot 5 của thứ Sáu trong 2018–2021 sẽ bị xoá oan, và đó là một phép xoá thiên lệch theo thời gian.
