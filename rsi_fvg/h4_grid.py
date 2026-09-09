@@ -17,6 +17,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from .bars import Bars
+from .indicators import atr_wilder
 from .quarters import server_to_ny
 
 ANCHOR_HOUR = 17                      # 17:00 New York — đóng ngày, và khe nghỉ
@@ -70,3 +72,68 @@ def label_h4(time: np.ndarray, anchor_offset: int = 0) -> H4Labels:
 
     return H4Labels(ny=ny, trading_day=trading_day, slot=slot,
                     day_num=day_num, utc_offset=utc_offset)
+
+
+MIN_BAR_FRACTION = 0.6
+ATR_PERIOD = 14
+_FIELDS = ("open", "high", "low", "close", "n")
+
+
+def expected_bars(slot: int, bar_seconds: int) -> float:
+    """Số bar kỳ vọng của một slot. Slot 0 chỉ có 3 giờ vì khe nghỉ."""
+    return SLOT_HOURS[slot] * 3600.0 / bar_seconds
+
+
+def aggregate_days(bars: Bars, labels: H4Labels, bar_seconds: int,
+                   min_fraction: float = MIN_BAR_FRACTION,
+                   atr_period: int = ATR_PERIOD) -> pd.DataFrame:
+    """Gộp bar thành một dòng mỗi ngày giao dịch với OHLC của cả sáu slot.
+
+    Ba luật loại của spec §3.3, thi hành trong ĐÚNG hàm này để đường thật và
+    đường null không thể lệch nhau:
+
+      1. Loại cả ngày nếu bất kỳ slot nào có ít hơn `min_fraction` số bar kỳ
+         vọng. Theo tỉ lệ chứ không theo số tuyệt đối vì slot 0 chỉ có 3 giờ.
+         Cần thiết vì dữ liệu thật cho p05 của slot 0 = 1 bar, và một cây H4
+         dựng từ một bar có high == low, làm "kill hai đầu" thành vô nghĩa.
+      2. Loại ngày chuyển DST — nhận diện bằng offset UTC->NY đổi trong ngày.
+         Ngày đó có một slot dài 3 hoặc 5 giờ nên range không so được.
+      3. Luật 1 và 2 áp y nguyên cho mọi `anchor_offset`.
+
+    `day_atr` tính SAU khi loại, trên chuỗi ngày còn sống: một ngày bị loại có
+    high/low không đáng tin và sẽ đầu độc ATR của 14 ngày kế tiếp.
+
+    `first`/`last` cho open/close là đúng vì `bars` theo thứ tự thời gian và
+    groupby giữ thứ tự trong nhóm.
+    """
+    df = pd.DataFrame({
+        "day": labels.day_num, "slot": labels.slot,
+        "open": bars.open, "high": bars.high,
+        "low": bars.low, "close": bars.close,
+        "off": labels.utc_offset,
+    })
+    agg = df.groupby(["day", "slot"], sort=True).agg(
+        open=("open", "first"), high=("high", "max"),
+        low=("low", "min"), close=("close", "last"), n=("close", "size"),
+    )
+    wide = agg.unstack("slot")
+    wide.columns = [f"s{int(s)}_{field}" for field, s in wide.columns]
+    wide = wide.reindex(columns=[f"s{s}_{f}" for s in range(N_SLOTS) for f in _FIELDS])
+
+    keep = np.ones(len(wide), dtype=bool)
+    for s in range(N_SLOTS):
+        n = wide[f"s{s}_n"].to_numpy(dtype="float64")
+        keep &= np.isfinite(n) & (n >= min_fraction * expected_bars(s, bar_seconds))
+
+    n_off = df.groupby("day")["off"].nunique().reindex(wide.index).to_numpy()
+    keep &= (n_off == 1)
+
+    out = wide.loc[keep].copy()
+    out["day_high"] = out[[f"s{s}_high" for s in range(N_SLOTS)]].max(axis=1)
+    out["day_low"] = out[[f"s{s}_low" for s in range(N_SLOTS)]].min(axis=1)
+    out["day_close"] = out["s5_close"]
+    out["day_atr"] = atr_wilder(out["day_high"].to_numpy(),
+                                out["day_low"].to_numpy(),
+                                out["day_close"].to_numpy(), atr_period)
+    out["date"] = pd.to_datetime(out.index.to_numpy() * NS_PER_DAY)
+    return out
