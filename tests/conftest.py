@@ -2,6 +2,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -36,6 +37,18 @@ def bars_from_closes(closes, wick=0.5, start=1_700_000_000, step=300):
     return make_bars(opens, highs, lows, closes, start=start, step=step)
 
 
+def epoch_for_ny(y, m, d, hh, mm=0, ss=0):
+    """Epoch seconds mà server_to_ny sẽ đọc thành đúng giờ New York này.
+
+    Loader gán nhãn giờ treo tường của server là UTC (README, "Timestamps").
+    Nên đường đi ngược là: giờ NY -> giờ treo tường Athens -> bỏ tz -> coi như UTC.
+    """
+    ny = pd.Timestamp(year=y, month=m, day=d, hour=hh, minute=mm, second=ss,
+                      tz="America/New_York")
+    server_wall = ny.tz_convert("Europe/Athens").tz_localize(None)
+    return int(server_wall.value // 1_000_000_000)
+
+
 @pytest.fixture
 def mk_bars():
     return make_bars
@@ -44,3 +57,8 @@ def mk_bars():
 @pytest.fixture
 def mk_closes():
     return bars_from_closes
+
+
+@pytest.fixture
+def mk_epoch_ny():
+    return epoch_for_ny
