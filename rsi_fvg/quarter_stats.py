@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from .bars import Bars
-from .quarters import QuarterLabels
+from .quarters import TIERS, QuarterLabels, label_quarters
 
 MIN_BARS_PER_QUARTER = 3
 _FIELDS = ("open", "high", "low", "close", "n")
@@ -171,3 +171,79 @@ def stat_reclaim_q3(w: pd.DataFrame) -> dict[str, float]:
         "reclaim_pooled_against": _mean_or_nan(pooled), "n_pooled": float(pooled.size),
         "n_both_sides": float(both.sum()),
     }
+
+
+OFFSET_EXCLUDE = 600
+
+STATS = {
+    "sweep": stat_sweep,
+    "range_by_index": stat_range_by_index,
+    "displacement_by_index": stat_displacement_by_index,
+    "q1_predicts_q2": stat_q1_predicts_q2,
+    "true_open": stat_true_open,
+    "reclaim_q3": stat_reclaim_q3,
+}
+
+
+def make_offsets(tier: str, bar_seconds: int, shifts: int, seed: int) -> np.ndarray:
+    """Offset neo cho mô hình null (spec §4.1).
+
+    Ba quyết định, cả ba đều có lý do:
+
+    1. SNAP về bội số `bar_seconds`. Lưới thật có biên trùng bar chính xác
+       (18:00, 19:30 đều là bội của 5 phút). Nếu lưới giả rơi giữa nến thì nó bị
+       handicap về hình học, và lưới thật trông tốt hơn CHỈ VÌ nó căn lề — một
+       bias nghiêng về phía lý thuyết.
+    2. Lấy từ [0, 4L) tức TRỌN chu kỳ, không phải [0, L). Dịch đúng L không đổi
+       biên mà chỉ ĐỔI TÊN quarter, và ①②③⑥ đều phụ thuộc chỉ số quarter nên
+       phép đổi tên đó là thông tin.
+    3. Loại lân cận 0 để lưới giả không trùng lưới thật.
+
+    Số offset khả dụng là (4L / bar_seconds) trừ lân cận 0, nên tầng q90 chỉ có
+    69 lưới null dù xin bao nhiêu. Hàm trả về ít hơn `shifts` khi hết mốc — KHÔNG
+    lặp lại mốc, vì mốc trùng sẽ làm phân phối null hẹp giả tạo.
+    """
+    cycle = 4 * TIERS[tier]
+    grid = np.arange(0, cycle, bar_seconds, dtype="int64")
+    ok = (grid >= OFFSET_EXCLUDE) & (grid <= cycle - OFFSET_EXCLUDE)
+    candidates = grid[ok]
+    if candidates.size <= shifts:
+        return candidates
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(candidates, size=shifts, replace=False))
+
+
+def run_grid(bars: Bars, tier: str, anchor_offset: int = 0,
+             min_bars: int = MIN_BARS_PER_QUARTER) -> dict[str, float]:
+    """Chạy cả sáu thống kê trên một lưới. Khoá dạng "<stat>.<đại lượng>"."""
+    labels = label_quarters(bars.time, tier, anchor_offset)
+    w = aggregate_cycles(bars, labels, min_bars)
+    out: dict[str, float] = {}
+    for name, fn in STATS.items():
+        for key, value in fn(w).items():
+            out[f"{name}.{key}"] = value
+    return out
+
+
+def run_null(bars: Bars, tier: str, offsets: np.ndarray,
+             min_bars: int = MIN_BARS_PER_QUARTER) -> pd.DataFrame:
+    """Một dòng mỗi lưới null."""
+    rows = []
+    for off in np.asarray(offsets, dtype="int64"):
+        row = {"anchor_offset": int(off)}
+        row.update(run_grid(bars, tier, int(off), min_bars))
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def percentile_of(real: float, null: np.ndarray) -> float:
+    """Phần trăm lưới null có giá trị NHỎ HƠN lưới thật.
+
+    100 nghĩa là lưới thật cao hơn mọi lưới null. NaN của null bị bỏ (một lưới
+    null có thể loại hết chu kỳ và cho NaN); NaN của `real` cho NaN.
+    """
+    null = np.asarray(null, dtype="float64")
+    null = null[np.isfinite(null)]
+    if null.size == 0 or not np.isfinite(real):
+        return float("nan")
+    return 100.0 * float(np.mean(null < real))

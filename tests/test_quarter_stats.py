@@ -3,10 +3,11 @@ import pandas as pd
 import pytest
 
 from conftest import epoch_for_ny, make_bars
-from rsi_fvg.quarter_stats import (MIN_BARS_PER_QUARTER, aggregate_cycles,
-                                   stat_displacement_by_index, stat_q1_predicts_q2,
-                                   stat_range_by_index, stat_reclaim_q3, stat_sweep,
-                                   stat_true_open)
+from rsi_fvg.quarter_stats import (MIN_BARS_PER_QUARTER, OFFSET_EXCLUDE, STATS,
+                                   aggregate_cycles, make_offsets, percentile_of,
+                                   run_grid, run_null, stat_displacement_by_index,
+                                   stat_q1_predicts_q2, stat_range_by_index,
+                                   stat_reclaim_q3, stat_sweep, stat_true_open)
 from rsi_fvg.quarters import label_quarters
 
 
@@ -264,3 +265,67 @@ def test_reclaim_on_empty_table_returns_nan():
     got = stat_reclaim_q3(_wide([]).iloc[0:0])
     assert np.isnan(got["reclaim_pooled_against"])
     assert got["n_pooled"] == 0.0
+
+
+def test_offsets_are_snapped_to_bar_interval():
+    """Snap là BẮT BUỘC: lưới thật có biên trùng bar, lưới giả rơi giữa nến sẽ bị
+    handicap hình học và lưới thật trông tốt hơn chỉ vì căn lề (spec §4.1)."""
+    off = make_offsets("session", bar_seconds=300, shifts=50, seed=1)
+    assert np.all(off % 300 == 0)
+
+
+def test_offsets_exclude_neighbourhood_of_zero():
+    off = make_offsets("session", bar_seconds=300, shifts=50, seed=1)
+    cycle = 4 * 21600
+    assert off.min() >= OFFSET_EXCLUDE
+    assert off.max() <= cycle - OFFSET_EXCLUDE
+
+
+def test_offsets_are_unique_and_deterministic_by_seed():
+    a = make_offsets("session", 300, 50, seed=7)
+    b = make_offsets("session", 300, 50, seed=7)
+    c = make_offsets("session", 300, 50, seed=8)
+    assert np.array_equal(a, b)
+    assert not np.array_equal(a, c)
+    assert len(set(a.tolist())) == len(a)
+
+
+def test_q90_tier_caps_at_69_offsets_not_200():
+    """Trần thật của tầng q90: chu kỳ 21600 s / bar 300 s = 72 mốc, trừ lân cận 0
+    còn 69. Yêu cầu 200 sẽ chỉ nhận được 69 — phải báo ra, không im lặng."""
+    off = make_offsets("q90", bar_seconds=300, shifts=200, seed=1)
+    assert len(off) == 69
+    off_sess = make_offsets("session", bar_seconds=300, shifts=200, seed=1)
+    assert len(off_sess) == 200
+
+
+def test_run_grid_returns_namespaced_keys_for_all_six_stats():
+    bars = _one_session_bars()
+    got = run_grid(bars, "q90")
+    assert set(STATS) == {"sweep", "range_by_index", "displacement_by_index",
+                          "q1_predicts_q2", "true_open", "reclaim_q3"}
+    assert "sweep.sweep_rate" in got
+    assert "reclaim_q3.reclaim_pooled_against" in got
+    assert all("." in k for k in got)
+
+
+def test_percentile_of_counts_nulls_below_real():
+    null = np.array([0.1, 0.2, 0.3, 0.4])
+    assert percentile_of(0.35, null) == 75.0
+    assert percentile_of(0.05, null) == 0.0
+    assert percentile_of(0.5, null) == 100.0
+
+
+def test_percentile_of_ignores_nan_nulls_and_nan_real():
+    null = np.array([0.1, np.nan, 0.3])
+    assert percentile_of(0.2, null) == 50.0
+    assert np.isnan(percentile_of(np.nan, null))
+    assert np.isnan(percentile_of(0.2, np.array([np.nan, np.nan])))
+
+
+def test_run_null_has_one_row_per_offset():
+    bars = _one_session_bars()
+    offsets = np.array([1800, 3600], dtype="int64")
+    out = run_null(bars, "q90", offsets)
+    assert len(out) == 2
+    assert list(out["anchor_offset"]) == [1800, 3600]
