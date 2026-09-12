@@ -379,7 +379,7 @@ if showZigzag and (lowConf or highConf)
     lastPivotBar := pvBar
     lastPivotPx  := pvPx
 
-if showSwings and lowConf and flagBuy and not na(prevLowP)
+if showSwings and lowConf and flagBuy and not na(prevLowP) and not na(atr)
     bool  realHl = lastLowP > prevLowP + hlMarginAtr * atr
     color hlCol  = realHl ? color.new(color.green, 0) : color.new(color.gray, 40)
     int   hlW    = realHl ? 2 : 1
@@ -389,7 +389,7 @@ if showSwings and lowConf and flagBuy and not na(prevLowP)
              " -> " + str.tostring(lastLowP, format.mintick), style=label.style_label_up,
              color=color.new(color.green, 80), textcolor=color.green, size=size.tiny)
 
-if showSwings and highConf and flagSell and not na(prevHighP)
+if showSwings and highConf and flagSell and not na(prevHighP) and not na(atr)
     bool  realLh = lastHighP < prevHighP - hlMarginAtr * atr
     color lhCol  = realLh ? color.new(color.red, 0) : color.new(color.gray, 40)
     int   lhW    = realLh ? 2 : 1
