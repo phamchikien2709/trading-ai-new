@@ -36,6 +36,10 @@
 //
 //  Python oracle + spec day du: docs/superpowers/specs/2026-09-12-kill-peak-mtf-design.md
 // =============================================================================
+// 500 la tran cung cua Pine (khong nang duoc): line va label moi loai chi giu
+// toi da 500 doi tuong, cai cu nhat tu dong bi xoa khi vuot. Tren chart M1
+// nhieu swing, cuon nguoc ve qua khu co the khong con thay hinh ve cua setup
+// cu — do khong phai bug.
 indicator("Kill Peak — Dinh Cho Kill", overlay=true,
      max_lines_count=500, max_labels_count=500)
 
@@ -330,9 +334,9 @@ if showCtx and cDn50 and not na(killHigh) and killHighBar == bar_index
     killHiLb := label.new(bar_index, killHigh, "DINH CHO KILL " + str.tostring(killHigh, format.mintick),
          style=label.style_label_left, color=color.new(color.orange, 85),
          textcolor=color.orange, size=size.small)
-if flagBuy and not na(killHiLn)
+if showCtx and flagBuy and not na(killHiLn)
     line.set_x2(killHiLn, bar_index)
-if not na(buyEnd) and not na(killHiLn)
+if showCtx and not na(buyEnd) and not na(killHiLn)
     line.set_x2(killHiLn, bar_index)
     label.new(bar_index, killHigh, buyEnd, style=label.style_label_up,
          color=color.new(color.orange, 70), textcolor=color.orange, size=size.tiny)
@@ -346,9 +350,9 @@ if showCtx and cUp50 and not na(killLow) and killLowBar == bar_index
     killLoLb := label.new(bar_index, killLow, "DAY CHO KILL " + str.tostring(killLow, format.mintick),
          style=label.style_label_left, color=color.new(color.teal, 85),
          textcolor=color.teal, size=size.small)
-if flagSell and not na(killLoLn)
+if showCtx and flagSell and not na(killLoLn)
     line.set_x2(killLoLn, bar_index)
-if not na(sellEnd) and not na(killLoLn)
+if showCtx and not na(sellEnd) and not na(killLoLn)
     line.set_x2(killLoLn, bar_index)
     label.new(bar_index, killLow, sellEnd, style=label.style_label_down,
          color=color.new(color.teal, 70), textcolor=color.teal, size=size.tiny)
@@ -376,7 +380,7 @@ if showZigzag and (lowConf or highConf)
     lastPivotPx  := pvPx
 
 if showSwings and lowConf and flagBuy and not na(prevLowP)
-    bool  realHl = lastLowP > prevLowP
+    bool  realHl = lastLowP > prevLowP + hlMarginAtr * atr
     color hlCol  = realHl ? color.new(color.green, 0) : color.new(color.gray, 40)
     int   hlW    = realHl ? 2 : 1
     line.new(prevLowBar, prevLowP, lastLowBar, lastLowP, color=hlCol, width=hlW)
@@ -386,7 +390,7 @@ if showSwings and lowConf and flagBuy and not na(prevLowP)
              color=color.new(color.green, 80), textcolor=color.green, size=size.tiny)
 
 if showSwings and highConf and flagSell and not na(prevHighP)
-    bool  realLh = lastHighP < prevHighP
+    bool  realLh = lastHighP < prevHighP - hlMarginAtr * atr
     color lhCol  = realLh ? color.new(color.red, 0) : color.new(color.gray, 40)
     int   lhW    = realLh ? 2 : 1
     line.new(prevHighBar, prevHighP, lastHighBar, lastHighP, color=lhCol, width=lhW)
@@ -415,8 +419,9 @@ if showSignals and (buySig or sellSig)
     label.new(bar_index, s, "R:R " + str.tostring(r, "#.##"),
          style=label.style_label_up, color=color.new(color.gray, 80),
          textcolor=color.gray, size=size.tiny)
-if posOpen
+if posOpen and not na(slLn)
     line.set_x2(slLn, bar_index)
+if posOpen and not na(tpLn)
     line.set_x2(tpLn, bar_index)
 
 if showRejected and (buyRejRr or sellRejRr)
