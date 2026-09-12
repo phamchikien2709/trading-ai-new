@@ -252,6 +252,45 @@ if posOpen
         posOpen := false
         posDir  := 0
 
+// =============================================================================
+//  Bo dem — Task 7. Phai nam TRUOC khoi tin hieu: khoi tin hieu ghi de
+//  flagBuyUsed/flagSellUsed := true ngay trong cung nen co tat, nen doc muon
+//  se lam cntKillInB/S sai.
+// =============================================================================
+var int cntFlagsB  = 0
+var int cntKillB   = 0
+var int cntKillInB = 0
+var int cntRsiOutB = 0
+var int cntNewLvlB = 0
+
+var int cntFlagsS  = 0
+var int cntKillS   = 0
+var int cntKillInS = 0
+var int cntRsiOutS = 0
+var int cntNewLvlS = 0
+
+if cDn50 and flagBuyBar == bar_index
+    cntFlagsB += 1
+if buyEnd == "KILL"
+    cntKillB += 1
+    if flagBuyUsed
+        cntKillInB += 1
+if buyEnd == "RSIOUT"
+    cntRsiOutB += 1
+if buyEnd == "NEWLEVEL"
+    cntNewLvlB += 1
+
+if cUp50 and flagSellBar == bar_index
+    cntFlagsS += 1
+if sellEnd == "KILL"
+    cntKillS += 1
+    if flagSellUsed
+        cntKillInS += 1
+if sellEnd == "RSIOUT"
+    cntRsiOutS += 1
+if sellEnd == "NEWLEVEL"
+    cntNewLvlS += 1
+
 // ---- KHOI TIN HIEU ----
 bool  buySig    = false
 bool  buyRejRr  = false
@@ -429,3 +468,81 @@ if showRejected and (buyRejRr or sellRejRr)
     label.new(bar_index, close, "RR " + str.tostring(r, "#.##") + " < min",
          style=label.style_label_left, color=color.new(color.gray, 85),
          textcolor=color.gray, size=size.tiny)
+
+// =============================================================================
+//  Buoc 4: bang trang thai — Task 7. lastSigTxt phai cap nhat MOI nen (khong
+//  chi nen cuoi) vi buySig/sellSig chi dung dung 1 nen luc no lenh; neu doc
+//  truc tiep trong khoi islast thi hau nhu luon la "—".
+// =============================================================================
+var string lastSigTxt = "—"
+if buySig
+    lastSigTxt := "BUY " + str.tostring(buyRr, "#.##") + "R, nen " + str.tostring(bar_index)
+if sellSig
+    lastSigTxt := "SELL " + str.tostring(sellRr, "#.##") + "R, nen " + str.tostring(bar_index)
+
+if showTable and barstate.islast
+    string ctxState = measHi ? "DANG DO DINH" :
+         measLo ? "DANG DO DAY" :
+         flagBuy ? "CHO KILL " + str.tostring(killHigh, format.mintick) + ", " + str.tostring(bar_index - flagBuyBar) + " nen" :
+         flagSell ? "CHO KILL DAY " + str.tostring(killLow, format.mintick) + ", " + str.tostring(bar_index - flagSellBar) + " nen" :
+         "—"
+
+    var table stateTbl = table.new(position.top_right, 2, 9, border_width=1)
+    table.cell(stateTbl, 0, 0, "TF chart / HTF", text_size=size.small)
+    table.cell(stateTbl, 1, 0, timeframe.period + " / " + htfTf, text_size=size.small)
+    table.cell(stateTbl, 0, 1, "RSI boi canh", text_size=size.small)
+    table.cell(stateTbl, 1, 1, str.tostring(ctxRsi, "#.##"), text_size=size.small)
+    table.cell(stateTbl, 0, 2, "Trang thai M5", text_size=size.small)
+    table.cell(stateTbl, 1, 2, ctxState, text_size=size.small)
+    table.cell(stateTbl, 0, 3, "RSI(2)", text_size=size.small)
+    table.cell(stateTbl, 1, 3, str.tostring(fastRsi, "#.##"), text_size=size.small)
+    table.cell(stateTbl, 0, 4, "Swing low gan nhat", text_size=size.small)
+    table.cell(stateTbl, 1, 4, na(lastLowP) ? "-" : str.tostring(lastLowP, format.mintick), text_size=size.small)
+    table.cell(stateTbl, 0, 5, "Swing low truoc", text_size=size.small)
+    table.cell(stateTbl, 1, 5, na(prevLowP) ? "-" : str.tostring(prevLowP, format.mintick), text_size=size.small)
+    table.cell(stateTbl, 0, 6, "Swing high gan nhat", text_size=size.small)
+    table.cell(stateTbl, 1, 6, na(lastHighP) ? "-" : str.tostring(lastHighP, format.mintick), text_size=size.small)
+    table.cell(stateTbl, 0, 7, "Swing high truoc", text_size=size.small)
+    table.cell(stateTbl, 1, 7, na(prevHighP) ? "-" : str.tostring(prevHighP, format.mintick), text_size=size.small)
+    table.cell(stateTbl, 0, 8, "Tin hieu gan nhat", text_size=size.small)
+    table.cell(stateTbl, 1, 8, lastSigTxt, text_size=size.small)
+
+// =============================================================================
+//  Buoc 5: bang dem — Task 7. Cot: chi tieu / BUY / SELL. Hang KILL MA HUT
+//  duoc to dam de so voi ban v1 (xem dau file).
+// =============================================================================
+if showCounters and barstate.islast
+    int killMaHutB = cntKillB - cntKillInB
+    int killMaHutS = cntKillS - cntKillInS
+
+    var table cntTbl = table.new(position.bottom_right, 3, 7, border_width=1)
+    table.cell(cntTbl, 0, 0, "chi tieu", text_size=size.small)
+    table.cell(cntTbl, 1, 0, "BUY", text_size=size.small)
+    table.cell(cntTbl, 2, 0, "SELL", text_size=size.small)
+
+    table.cell(cntTbl, 0, 1, "co da bat", text_size=size.small)
+    table.cell(cntTbl, 1, 1, str.tostring(cntFlagsB), text_size=size.small)
+    table.cell(cntTbl, 2, 1, str.tostring(cntFlagsS), text_size=size.small)
+
+    table.cell(cntTbl, 0, 2, "ket thuc vi KILL", text_size=size.small)
+    table.cell(cntTbl, 1, 2, str.tostring(cntKillB), text_size=size.small)
+    table.cell(cntTbl, 2, 2, str.tostring(cntKillS), text_size=size.small)
+
+    table.cell(cntTbl, 0, 3, "da kip vao lenh", text_size=size.small)
+    table.cell(cntTbl, 1, 3, str.tostring(cntKillInB), text_size=size.small)
+    table.cell(cntTbl, 2, 3, str.tostring(cntKillInS), text_size=size.small)
+
+    table.cell(cntTbl, 0, 4, "KILL MA HUT", text_size=size.small, text_color=color.white,
+         bgcolor=color.new(color.red, 30))
+    table.cell(cntTbl, 1, 4, str.tostring(killMaHutB), text_size=size.small, text_color=color.white,
+         bgcolor=color.new(color.red, 30))
+    table.cell(cntTbl, 2, 4, str.tostring(killMaHutS), text_size=size.small, text_color=color.white,
+         bgcolor=color.new(color.red, 30))
+
+    table.cell(cntTbl, 0, 5, "chet vi RSIOUT", text_size=size.small)
+    table.cell(cntTbl, 1, 5, str.tostring(cntRsiOutB), text_size=size.small)
+    table.cell(cntTbl, 2, 5, str.tostring(cntRsiOutS), text_size=size.small)
+
+    table.cell(cntTbl, 0, 6, "chet vi NEWLEVEL", text_size=size.small)
+    table.cell(cntTbl, 1, 6, str.tostring(cntNewLvlB), text_size=size.small)
+    table.cell(cntTbl, 2, 6, str.tostring(cntNewLvlS), text_size=size.small)
