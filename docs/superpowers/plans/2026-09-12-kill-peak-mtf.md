@@ -767,7 +767,7 @@ File strategy (Task 8) dùng y hệt khối này, thay dòng `indicator(...)` v�
 float ctxRsi = request.security(syminfo.tickerid, htfTf, ta.rsi(close, ctxLen)[1],
      barmerge.gaps_off, barmerge.lookahead_on)
 
-int   n   = math.max(1, math.round(timeframe.in_seconds(htfTf) / timeframe.in_seconds()))
+int   n   = math.max(1, int(math.round(timeframe.in_seconds(htfTf) / timeframe.in_seconds())))
 float atr = ta.atr(atrLen)
 
 // ta.* phai goi o top level, khong duoc nam trong if — chung giu state noi bo

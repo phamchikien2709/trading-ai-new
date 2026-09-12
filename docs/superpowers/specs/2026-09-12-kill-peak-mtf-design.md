@@ -38,7 +38,7 @@ Cặp `[1]` + `lookahead_on` là idiom không repaint đã dùng trong repo: `lo
 **Cái giá phải trả và cách vá.** Lúc phát hiện cú cắt lên 70, nến M5 gây ra cú cắt đó đã đóng — phần cao của chính nó nằm ở `n` nến M1 vừa qua. Nên khi mở đoạn đo phải seed:
 
 ```
-n       = math.max(1, math.round(timeframe.in_seconds(htfTf) / timeframe.in_seconds()))
+n       = math.max(1, int(math.round(timeframe.in_seconds(htfTf) / timeframe.in_seconds())))
 runHigh = ta.highest(high, n)
 ```
 

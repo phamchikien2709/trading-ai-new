@@ -27,7 +27,9 @@
 //   1. Luat reset leg swing KHAC rsi2_swing/rsi2_ema_swing: cat lai theo
 //      huong leg dang mo KHONG lam gi (khong khoi dong lai viec theo doi cuc
 //      tri). Xem spec docs/superpowers/specs/2026-09-12-kill-peak-mtf-design.md
-//      §4.1 — hai file rsi2_* con sai cho nay (da vá o commit 96ddb5d).
+//      §4.1 — commit 96ddb5d chi tao rsi2_divergence_* voi luat dung nay;
+//      rsi2_swing_strategy.pine va rsi2_ema_swing_strategy.pine VAN CON luat
+//      cu, chua duoc vá.
 //   2. RR thuc te se lech chut so voi RR da qua cua minRR: minRR loc tren gia
 //      close luc xac nhan swing, nhung lenh that su khop o open cua nen SAU
 //      nen tin hieu, nen entry thuc te khac gia dung de tinh rr.
@@ -75,7 +77,7 @@ showCounters = input.bool(true,  "Bang dem", group=grpShow)
 float ctxRsi = request.security(syminfo.tickerid, htfTf, ta.rsi(close, ctxLen)[1],
      barmerge.gaps_off, barmerge.lookahead_on)
 
-int   n   = math.max(1, math.round(timeframe.in_seconds(htfTf) / timeframe.in_seconds()))
+int   n   = math.max(1, int(math.round(timeframe.in_seconds(htfTf) / timeframe.in_seconds())))
 float atr = ta.atr(atrLen)
 
 // ta.* phai goi o top level, khong duoc nam trong if — chung giu state noi bo
