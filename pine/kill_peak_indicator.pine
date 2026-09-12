@@ -167,3 +167,147 @@ if cUp70
     if not measHi
         measHi  := true
         runHigh := seedHigh
+
+// =============================================================================
+//  Tang swing (khung chart, M1) — chep tu pine/rsi2_divergence_indicator.pine,
+//  bo phan nen neo (bullBar/bearRsi/...). Doi ten cho khop spec §4.3.
+// =============================================================================
+float fastRsi = ta.rsi(close, fastLen)
+
+bool fOk = not na(fastRsi) and not na(fastRsi[1])
+bool fUp = fOk and fastRsi[1] <= fHi and fastRsi > fHi
+bool fDn = fOk and fastRsi[1] >= fLo and fastRsi < fLo
+
+// seg: 0 chua xac dinh, 1 dang leg HIGH, -1 dang leg LOW
+var int   seg         = 0
+var float segHigh     = na
+var int   segHighBar  = na
+var float segLow      = na
+var int   segLowBar   = na
+
+var float prevLowP    = na
+var int   prevLowBar  = na
+var float lastLowP    = na
+var int   lastLowBar  = na
+var float prevHighP   = na
+var int   prevHighBar = na
+var float lastHighP   = na
+var int   lastHighBar = na
+
+bool lowConf  = false
+bool highConf = false
+
+// 1. noi cuc tri: nen bien thuoc ca hai leg
+if seg == 1 and high > segHigh
+    segHigh    := high
+    segHighBar := bar_index
+if seg == -1 and low < segLow
+    segLow    := low
+    segLowBar := bar_index
+
+// 2. chuyen leg — if seg != 1 / seg != -1 phai nam TRUOC seg := 1 / seg := -1
+// de ca hai kiem tra doc gia tri seg CU (ban va: cat lai theo huong leg dang
+// mo khong lam gi, khong khoi dong lai viec theo doi cuc tri).
+if fUp
+    if seg == -1
+        lowConf    := true
+        prevLowP   := lastLowP
+        prevLowBar := lastLowBar
+        lastLowP   := segLow
+        lastLowBar := segLowBar
+    if seg != 1
+        segHigh    := high
+        segHighBar := bar_index
+    seg := 1
+if fDn
+    if seg == 1
+        highConf    := true
+        prevHighP   := lastHighP
+        prevHighBar := lastHighBar
+        lastHighP   := segHigh
+        lastHighBar := segHighBar
+    if seg != -1
+        segLow    := low
+        segLowBar := bar_index
+    seg := -1
+
+// =============================================================================
+//  Mo phong vi the (indicator khong co strategy.*) — chan tin hieu chong lan,
+//  cho bang dem biet "da kip vao lenh".
+// =============================================================================
+var bool  posOpen = false
+var int   posDir  = 0            // 1 = long, -1 = short
+var float posSl   = na
+var float posTp   = na
+
+// thoat truoc khi xet tin hieu moi
+if posOpen
+    bool hitLong  = posDir ==  1 and (low  <= posSl or high >= posTp)
+    bool hitShort = posDir == -1 and (high >= posSl or low  <= posTp)
+    if hitLong or hitShort
+        posOpen := false
+        posDir  := 0
+
+// ---- KHOI TIN HIEU ----
+bool  buySig    = false
+bool  buyRejRr  = false
+float buyEntry  = na
+float buySl     = na
+float buyTp     = na
+float buyRr     = na
+
+if lowConf and enableBuy and flagBuy and not posOpen and not na(prevLowP) and not na(atr)
+    bool  hl    = lastLowP > prevLowP + hlMarginAtr * atr
+    bool  after = not requireSwing2AfterFlag or lastLowBar >= flagBuyBar
+    bool  free  = not (oneTradePerFlag and flagBuyUsed)
+    float e     = close
+    float s     = lastLowP - slAtrMult * atr
+    float t     = killHigh
+    if hl and after and free and e - s > 0
+        float r = (t - e) / (e - s)
+        if r >= minRR and (maxRR <= 0 or r <= maxRR)
+            buySig      := true
+            buyEntry    := e
+            buySl       := s
+            buyTp       := t
+            buyRr       := r
+            flagBuyUsed := true
+            posOpen     := true
+            posDir      := 1
+            posSl       := s
+            posTp       := t
+        else
+            buyRejRr := true
+            buyRr    := r
+
+bool  sellSig    = false
+bool  sellRejRr  = false
+float sellEntry  = na
+float sellSl     = na
+float sellTp     = na
+float sellRr     = na
+
+if highConf and enableSell and flagSell and not posOpen and not na(prevHighP) and not na(atr)
+    bool  lh    = lastHighP < prevHighP - hlMarginAtr * atr
+    bool  after = not requireSwing2AfterFlag or lastHighBar >= flagSellBar
+    bool  free  = not (oneTradePerFlag and flagSellUsed)
+    float e     = close
+    float s     = lastHighP + slAtrMult * atr
+    float t     = killLow
+    if lh and after and free and s - e > 0
+        float r = (e - t) / (s - e)
+        if r >= minRR and (maxRR <= 0 or r <= maxRR)
+            sellSig      := true
+            sellEntry    := e
+            sellSl       := s
+            sellTp       := t
+            sellRr       := r
+            flagSellUsed := true
+            posOpen      := true
+            posDir       := -1
+            posSl        := s
+            posTp        := t
+        else
+            sellRejRr := true
+            sellRr    := r
+// ---- HET KHOI TIN HIEU ----
