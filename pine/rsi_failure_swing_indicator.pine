@@ -1,0 +1,356 @@
+//@version=6
+// =============================================================================
+//  RSI Failure Swing Divergence — indicator bao diem vao lenh
+//
+//  Y tuong: sau mot pha qua ban that su, gia quay lai pha day cu MOT LAN NUA
+//  nhung RSI thi khong — roi RSI lay lai muc 50. Do la luc luc ban da can.
+//
+//  May trang thai, chieu BUY (SELL soi guong qua obLevel):
+//    IDLE     RSI cat XUONG osLevel                      -> SEEKING
+//    SEEKING  theo doi L1 = low thap nhat, R1 = RSI thap nhat
+//             RSI cat LEN midLevel                       -> ARMED (chot L1/R1)
+//    ARMED    cho gia thung L1                           -> BROKEN
+//    BROKEN   theo doi L2/R2. RSI cat LEN midLevel       -> TIN HIEU
+//
+//  Ba duong chet, ap cho ca ARMED lan BROKEN:
+//    RSI >= cancelHi   -> ve IDLE. Len duoc toi day la thi truong da roi che
+//                         do do day, tien de cua setup mat.
+//    RSI <= cancelLo   -> sang SEEKING voi L1 MOI bat dau ngay tai day.
+//    qua maxWait nen ke tu luc ARM -> ve IDLE.
+//
+//  Vi sao khong co khoi kiem phan ky rieng: R1 luon < osLevel theo dinh nghia
+//  (pha qua ban chi mo khi RSI cat xuong muc do). Ma setup chi song neu R2
+//  chua bao gio cham cancelLo. Voi mac dinh osLevel == cancelLo == 30 thi
+//  R2 > 30 > R1 luon dung -> phan ky duoc CAU TRUC dam bao. Tach cancelLo
+//  thanh input rieng de noi long duoc ma khong dong cham dinh nghia pha.
+//
+//  Xac nhan phai la mot cu CAT LEN midLevel that su, tuc RSI phai tut xuong
+//  <= midLevel sau khi gia pha day roi moi len lai. Hau qua co chu y: mot nen
+//  dao chieu manh vua thung L1 vua dong cua tren 50 KHONG ra tin hieu — no
+//  chi dat trang thai BROKEN, phai cho nhip sau. Dung chu "mot lan nua".
+//  Thu tu buoc 3 (tin hieu) truoc buoc 4 (pha) la thu thuc thi luat nay.
+//
+//  Entry = close nen xac nhan. SL = L2 -/+ slAtrMult*ATR. TP = tpR lan R.
+//
+//  Khong repaint: moi thu doc tu nen da dong, nhan ve tai nen xac nhan va
+//  khong bao gio dich. Chi bang trang thai va cuc tri dang chay la cap nhat
+//  trong nen hien tai.
+//
+//  Pane: indicator nam o pane RIENG de ve duoc RSI va duong phan ky ngay tren
+//  no — nua cau chuyen cua setup nam o do. Cac doi tuong thuoc pane gia
+//  (duong chan 1, SL/TP, nhan entry) dung `force_overlay=true`.
+//  NEU KHONG COMPILE: `force_overlay` la cho dang ngo nhat file nay. No co
+//  tu Pine v5.5 nhung khong kiem duoc o may viet ra file. Bao loi o do thi
+//  doi `overlay=false` thanh `true`, bo het `force_overlay=true`, va chuyen
+//  phan ve RSI sang mot indicator rieng.
+//
+//  Kiem chung: may trang thai nay duoc dung lai bang Python va co 13 test
+//  xanh (scratchpad, khong commit) — Pine khong compile duoc o may viet ra
+//  no. Phan VE va BANG khong co test, chi soat tay.
+// =============================================================================
+
+indicator("RSI Failure Swing", overlay=false, max_lines_count=500, max_labels_count=500)
+
+// ---------------------------------------------------------------- inputs
+grpRsi   = "RSI"
+rsiLen   = input.int(14, "RSI length", minval=2, group=grpRsi)
+obLevel  = input.float(70, "Muc qua mua (mo pha SELL)", group=grpRsi)
+midLevel = input.float(50, "Muc giua (chot chan + xac nhan)", group=grpRsi)
+osLevel  = input.float(30, "Muc qua ban (mo pha BUY)", group=grpRsi)
+
+grpCancel = "Huy setup"
+cancelHi  = input.float(70, "Huy BUY khi RSI >= (SELL: bat dau chan moi)", group=grpCancel)
+cancelLo  = input.float(30, "Huy SELL khi RSI <= (BUY: bat dau chan moi)", group=grpCancel,
+     tooltip="Chan 2 cham nguong nay la setup chet. Tach rieng khoi muc qua ban/qua mua de noi long duoc ma khong doi dinh nghia pha. Ha xuong 28 neu thay mat tin hieu o cho dang le co.")
+maxWait   = input.int(150, "Het han sau (nen, 0 = tat)", minval=0, group=grpCancel,
+     tooltip="Dem tu luc ARM, tuc luc RSI cat qua muc giua lan dau.")
+
+grpRisk   = "Rui ro"
+atrLen    = input.int(14, "ATR length", minval=1, group=grpRisk)
+slAtrMult = input.float(0.5, "SL bien (x ATR)", minval=0, step=0.1, group=grpRisk)
+tpR       = input.float(3.0, "Take profit (R)", minval=0.1, step=0.5, group=grpRisk)
+
+grpEntry   = "Chieu"
+enableBuy  = input.bool(true, "Enable BUY", group=grpEntry)
+enableSell = input.bool(true, "Enable SELL", group=grpEntry)
+
+grpShow   = "Hien thi"
+showState = input.bool(true, "To nen theo trang thai", group=grpShow)
+showLevel = input.bool(true, "Duong chan 1 cho pha (pane gia)", group=grpShow)
+showDiv   = input.bool(true, "Duong phan ky", group=grpShow)
+showSig   = input.bool(true, "Mui ten + SL/TP", group=grpShow)
+showTable = input.bool(true, "Bang trang thai", group=grpShow)
+
+// ---------------------------------------------------------------- series
+// ta.* phai o top level: chung giu state noi bo, goi trong if la sai am tham
+float rsi = ta.rsi(close, rsiLen)
+float atr = ta.atr(atrLen)
+
+bool ok     = not na(rsi) and not na(rsi[1]) and not na(atr)
+bool xDnOs  = ok and rsi[1] >= osLevel  and rsi < osLevel
+bool xUpOb  = ok and rsi[1] <= obLevel  and rsi > obLevel
+bool xUpMid = ok and rsi[1] <= midLevel and rsi > midLevel
+bool xDnMid = ok and rsi[1] >= midLevel and rsi < midLevel
+bool deepLo = ok and rsi <= cancelLo
+bool deepHi = ok and rsi >= cancelHi
+
+// trang thai: 0 IDLE, 1 SEEKING, 2 ARMED, 3 BROKEN
+var int   bSt     = 0
+var float bP1     = na
+var float bR1     = na
+var int   bP1Bar  = na
+var int   bArmBar = na
+var float bP2     = na
+var int   bP2Bar  = na
+var float bR2     = na
+var int   bR2Bar  = na
+
+var int   sSt     = 0
+var float sP1     = na
+var float sR1     = na
+var int   sP1Bar  = na
+var int   sArmBar = na
+var float sP2     = na
+var int   sP2Bar  = na
+var float sR2     = na
+var int   sR2Bar  = na
+
+// chi khac na dung o nen setup chet / ra tin hieu
+string bEnd   = na
+string sEnd   = na
+bool   bSig   = false
+bool   sSig   = false
+float  bEntry = na
+float  bSl    = na
+float  bTp    = na
+float  sEntry = na
+float  sSl    = na
+float  sTp    = na
+
+// ---- KHOI TRANG THAI BUY ----
+// 1. noi cuc tri
+if bSt == 1
+    if na(bP1) or low < bP1
+        bP1    := low
+        bP1Bar := bar_index
+    if na(bR1) or rsi < bR1
+        bR1 := rsi
+if bSt == 2 or bSt == 3
+    if na(bP2) or low < bP2
+        bP2    := low
+        bP2Bar := bar_index
+    if na(bR2) or rsi < bR2
+        bR2    := rsi
+        bR2Bar := bar_index
+
+// 2. huy
+if bSt == 2 or bSt == 3
+    if deepHi
+        bSt  := 0
+        bEnd := "HUY: RSI >= " + str.tostring(cancelHi, "#.##")
+    else if deepLo
+        bSt    := 1
+        bP1    := low
+        bP1Bar := bar_index
+        bR1    := rsi
+        bP2    := na
+        bP2Bar := na
+        bR2    := na
+        bR2Bar := na
+        bEnd   := "HUY: RSI <= " + str.tostring(cancelLo, "#.##") + " (chan 1 moi)"
+    else if maxWait > 0 and bar_index - bArmBar > maxWait
+        bSt  := 0
+        bEnd := "HUY: het han"
+
+// 3. tin hieu — PHAI dung truoc buoc 4, xem header
+if bSt == 3 and xUpMid
+    if enableBuy
+        float e = close
+        float s = bP2 - slAtrMult * atr
+        if e - s > 0
+            bSig   := true
+            bEntry := e
+            bSl    := s
+            bTp    := e + tpR * (e - s)
+    bSt := 0
+
+// 4. gia pha chan 1
+if bSt == 2 and low < bP1
+    bSt := 3
+
+// 5. mo pha qua ban
+if bSt == 0 and xDnOs
+    bSt    := 1
+    bP1    := low
+    bP1Bar := bar_index
+    bR1    := rsi
+
+// 6. chot chan 1, vu trang
+if bSt == 1 and xUpMid
+    bSt     := 2
+    bArmBar := bar_index
+    bP2     := low
+    bP2Bar  := bar_index
+    bR2     := rsi
+    bR2Bar  := bar_index
+
+// ---- KHOI TRANG THAI SELL (guong) ----
+if sSt == 1
+    if na(sP1) or high > sP1
+        sP1    := high
+        sP1Bar := bar_index
+    if na(sR1) or rsi > sR1
+        sR1 := rsi
+if sSt == 2 or sSt == 3
+    if na(sP2) or high > sP2
+        sP2    := high
+        sP2Bar := bar_index
+    if na(sR2) or rsi > sR2
+        sR2    := rsi
+        sR2Bar := bar_index
+
+if sSt == 2 or sSt == 3
+    if deepLo
+        sSt  := 0
+        sEnd := "HUY: RSI <= " + str.tostring(cancelLo, "#.##")
+    else if deepHi
+        sSt    := 1
+        sP1    := high
+        sP1Bar := bar_index
+        sR1    := rsi
+        sP2    := na
+        sP2Bar := na
+        sR2    := na
+        sR2Bar := na
+        sEnd   := "HUY: RSI >= " + str.tostring(cancelHi, "#.##") + " (chan 1 moi)"
+    else if maxWait > 0 and bar_index - sArmBar > maxWait
+        sSt  := 0
+        sEnd := "HUY: het han"
+
+if sSt == 3 and xDnMid
+    if enableSell
+        float e = close
+        float s = sP2 + slAtrMult * atr
+        if s - e > 0
+            sSig   := true
+            sEntry := e
+            sSl    := s
+            sTp    := e - tpR * (s - e)
+    sSt := 0
+
+if sSt == 2 and high > sP1
+    sSt := 3
+
+if sSt == 0 and xUpOb
+    sSt    := 1
+    sP1    := high
+    sP1Bar := bar_index
+    sR1    := rsi
+
+if sSt == 1 and xDnMid
+    sSt     := 2
+    sArmBar := bar_index
+    sP2     := high
+    sP2Bar  := bar_index
+    sR2     := rsi
+    sR2Bar  := bar_index
+// ---- HET KHOI TRANG THAI ----
+
+// ---------------------------------------------------------------- pane RSI
+plot(rsi, "RSI", color=color.new(color.blue, 0), linewidth=2)
+hline(obLevel,  "Qua mua", color=color.new(color.red, 60), linestyle=hline.style_dashed)
+hline(midLevel, "Giua",    color=color.new(color.gray, 40), linestyle=hline.style_dashed)
+hline(osLevel,  "Qua ban", color=color.new(color.teal, 60), linestyle=hline.style_dashed)
+
+color stateCol = bSt == 1 or sSt == 1 ? color.new(color.gray, 92) :
+     bSt == 2 ? color.new(color.teal, 90) :
+     bSt == 3 ? color.new(color.teal, 80) :
+     sSt == 2 ? color.new(color.red, 90) :
+     sSt == 3 ? color.new(color.red, 80) :
+     na
+bgcolor(showState ? stateCol : na, title="Trang thai")
+
+// duong phan ky tren chinh RSI — nua cau chuyen cua setup nam o pane nay
+if showDiv and bSig and not na(bR1) and not na(bR2)
+    line.new(bP1Bar, bR1, bR2Bar, bR2, color=color.new(color.teal, 0), width=2)
+if showDiv and sSig and not na(sR1) and not na(sR2)
+    line.new(sP1Bar, sR1, sR2Bar, sR2, color=color.new(color.red, 0), width=2)
+
+// ---------------------------------------------------------------- pane gia
+// force_overlay dua doi tuong sang pane gia du indicator nay o pane rieng
+var line bLvlLn = na
+var line sLvlLn = na
+
+if showLevel and bSt == 2 and bSt[1] != 2
+    bLvlLn := line.new(bar_index, bP1, bar_index + 1, bP1, force_overlay=true,
+         color=color.new(color.teal, 20), width=1, style=line.style_dotted)
+if showLevel and not na(bLvlLn) and (bSt == 2 or bSt == 3)
+    line.set_x2(bLvlLn, bar_index)
+
+if showLevel and sSt == 2 and sSt[1] != 2
+    sLvlLn := line.new(bar_index, sP1, bar_index + 1, sP1, force_overlay=true,
+         color=color.new(color.red, 20), width=1, style=line.style_dotted)
+if showLevel and not na(sLvlLn) and (sSt == 2 or sSt == 3)
+    line.set_x2(sLvlLn, bar_index)
+
+// duong phan ky ben gia: chan 1 -> chan 2
+if showDiv and bSig and not na(bP1Bar) and not na(bP2Bar)
+    line.new(bP1Bar, bP1, bP2Bar, bP2, force_overlay=true,
+         color=color.new(color.teal, 0), width=2)
+if showDiv and sSig and not na(sP1Bar) and not na(sP2Bar)
+    line.new(sP1Bar, sP1, sP2Bar, sP2, force_overlay=true,
+         color=color.new(color.red, 0), width=2)
+
+if showSig and bSig
+    label.new(bar_index, bEntry, "BUY " + str.tostring(bEntry, format.mintick),
+         force_overlay=true, style=label.style_label_up,
+         color=color.new(color.teal, 20), textcolor=color.white, size=size.small)
+    line.new(bar_index, bSl, bar_index + 20, bSl, force_overlay=true,
+         color=color.new(color.red, 0), width=1, style=line.style_dashed)
+    line.new(bar_index, bTp, bar_index + 20, bTp, force_overlay=true,
+         color=color.new(color.teal, 0), width=1, style=line.style_dashed)
+if showSig and sSig
+    label.new(bar_index, sEntry, "SELL " + str.tostring(sEntry, format.mintick),
+         force_overlay=true, style=label.style_label_down,
+         color=color.new(color.red, 20), textcolor=color.white, size=size.small)
+    line.new(bar_index, sSl, bar_index + 20, sSl, force_overlay=true,
+         color=color.new(color.red, 0), width=1, style=line.style_dashed)
+    line.new(bar_index, sTp, bar_index + 20, sTp, force_overlay=true,
+         color=color.new(color.teal, 0), width=1, style=line.style_dashed)
+
+// nhan ly do chet, de soi tay biet moi cu hong la hong kieu gi
+if showState and not na(bEnd)
+    label.new(bar_index, rsi, bEnd, style=label.style_label_down,
+         color=color.new(color.gray, 75), textcolor=color.gray, size=size.tiny)
+if showState and not na(sEnd)
+    label.new(bar_index, rsi, sEnd, style=label.style_label_up,
+         color=color.new(color.gray, 75), textcolor=color.gray, size=size.tiny)
+
+// ---------------------------------------------------------------- bang
+f_stName(s) =>
+    s == 1 ? "CHO HOI" : s == 2 ? "SAN SANG" : s == 3 ? "DA PHA CHAN 1" : "—"
+
+var table tbl = na
+if showTable and barstate.islast
+    if na(tbl)
+        tbl := table.new(position.top_right, 2, 7, border_width=1)
+    table.cell(tbl, 0, 0, "RSI(" + str.tostring(rsiLen) + ")", text_size=size.small)
+    table.cell(tbl, 1, 0, str.tostring(rsi, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 1, "BUY", text_size=size.small)
+    table.cell(tbl, 1, 1, f_stName(bSt), text_size=size.small)
+    table.cell(tbl, 0, 2, "  chan 1 (gia / RSI)", text_size=size.small)
+    table.cell(tbl, 1, 2, na(bP1) ? "—" : str.tostring(bP1, format.mintick) + " / " + str.tostring(bR1, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 3, "  chan 2 (gia / RSI)", text_size=size.small)
+    table.cell(tbl, 1, 3, na(bP2) ? "—" : str.tostring(bP2, format.mintick) + " / " + str.tostring(bR2, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 4, "SELL", text_size=size.small)
+    table.cell(tbl, 1, 4, f_stName(sSt), text_size=size.small)
+    table.cell(tbl, 0, 5, "  chan 1 (gia / RSI)", text_size=size.small)
+    table.cell(tbl, 1, 5, na(sP1) ? "—" : str.tostring(sP1, format.mintick) + " / " + str.tostring(sR1, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 6, "  cho (nen)", text_size=size.small)
+    table.cell(tbl, 1, 6, bSt == 2 or bSt == 3 ? str.tostring(bar_index - bArmBar) : sSt == 2 or sSt == 3 ? str.tostring(bar_index - sArmBar) : "—", text_size=size.small)
+
+// ---------------------------------------------------------------- alert
+if bSig
+    alert('{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BUY","setup":"RSIFS"' + ',"entry":' + str.tostring(bEntry, "#.#####") + ',"sl":' + str.tostring(bSl, "#.#####") + ',"tp":' + str.tostring(bTp, "#.#####") + '}', alert.freq_once_per_bar_close)
+if sSig
+    alert('{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"SELL","setup":"RSIFS"' + ',"entry":' + str.tostring(sEntry, "#.#####") + ',"sl":' + str.tostring(sSl, "#.#####") + ',"tp":' + str.tostring(sTp, "#.#####") + '}', alert.freq_once_per_bar_close)
