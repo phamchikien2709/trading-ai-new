@@ -1,0 +1,453 @@
+//@version=6
+// =============================================================================
+//  Kill Peak — Dinh Cho Kill (strategy: sizing + lenh that)
+//
+//  Cung tang boi canh M5 + tang swing M1 + khoi tin hieu voi
+//  pine/kill_peak_indicator.pine (doc header ben do de biet chi tiet kien
+//  truc, ba ly do huy co, va luat reset leg swing rieng cua ho kill_peak_*).
+//  File nay chi khac o phan thuc thi: strategy.* thay cho mo phong vi the,
+//  co sizing theo % rui ro, va gui alert JSON.
+//
+//  Khac pine/rsi2_divergence_strategy.pine (va rsi2_ema_swing_strategy.pine)
+//  o mot diem quan trong: cac file do phai huy roi dat lai strategy.exit
+//  SAU khi lenh khop that, vi TP la boi so R va chi tinh duoc tu gia khop
+//  that (strategy.position_avg_price) — nen can lArm/sArm/lSigBar/sSigBar
+//  va mot khoi dat lai o nen sau. O day KHONG can tro re-arm do: ca SL lan
+//  TP deu la MUC GIA CO DINH (buySl/buyTp, sellSl/sellTp da tinh xong ngay
+//  trong khoi tin hieu, truoc khi dat lenh), nen strategy.entry +
+//  strategy.exit dat MOT LAN duy nhat la xong.
+//
+//  Luu y (co y khong xu ly): tin hieu va bo loc minRR tinh tren gia close
+//  luc xac nhan swing, nhung lenh that su khop o open cua nen SAU nen tin
+//  hieu — nen RR thuc te cua lenh khop se lech chut so voi RR da qua duoc
+//  cua minRR. Da biet truoc, giong luu y #2 trong header cua
+//  kill_peak_indicator.pine.
+//
+//  Khoi tin hieu (danh dau bang hai comment moc o dau/cuoi ben duoi) duoc
+//  chep NGUYEN VAN tu pine/kill_peak_indicator.pine — bat bien quan trong
+//  nhat: hai file phai cho tin hieu giong het nhau, khong thi nguoi soi tay
+//  tren indicator va nguoi backtest tren strategy se thay hai ket qua khac
+//  nhau ma khong ai biet. Khac biet duy nhat duoc phep trong khoi do: dieu
+//  kien gate lenh moi doi tu "not posOpen" (mo phong vi the, chi co o
+//  indicator) sang "strategy.position_size == 0" (trang thai vi the that).
+//
+//  Khong mang sang tu indicator: toan bo phan ve cua Task 6 (line/label/
+//  bgcolor, zigzag, duong SL-TP, nhan RR bi loai) tru hai plotshape danh
+//  dau tin hieu BUY/SELL; bang trang thai chi tiet 9 hang cua Task 7; bien
+//  lastSigTxt (chi phuc vu bang do); khong co input blockOpp (spec §5 dieu
+//  v da chot luon bo qua tin hieu nguoc khi dang co lenh, khong dao lenh).
+//
+//  Mang sang nguyen ven: tang boi canh M5 (Task 4), tang swing M1 (Task 5),
+//  bo dem + bang dem cua Task 7 (nguoi dung can doi chieu dong KILL MA HUT
+//  giua hai file).
+// =============================================================================
+strategy("Kill Peak Strategy", overlay=true, initial_capital=10000,
+     default_qty_type=strategy.fixed, currency=currency.NONE,
+     commission_type=strategy.commission.percent, commission_value=0.0,
+     process_orders_on_close=false)
+
+grpCtx = "Boi canh (HTF)"
+htfTf  = input.timeframe("5", "Khung boi canh", group=grpCtx)
+ctxLen = input.int(14,   "RSI boi canh", minval=2, group=grpCtx)
+ctxHi  = input.float(70, "Moc mo doan do", group=grpCtx)
+ctxMid = input.float(50, "Moc chot muc + bat co", group=grpCtx)
+ctxLo  = input.float(30, "Moc huy co", group=grpCtx)
+
+grpSw   = "Swing (khung chart)"
+fastLen = input.int(2,    "RSI nhanh", minval=1, group=grpSw)
+fHi     = input.float(90, "Moc tren", group=grpSw)
+fLo     = input.float(10, "Moc duoi", group=grpSw)
+
+grpEntry               = "Vao lenh"
+enableBuy              = input.bool(true,  "Enable BUY",  group=grpEntry)
+enableSell             = input.bool(true,  "Enable SELL", group=grpEntry)
+hlMarginAtr            = input.float(0.0,  "Bien higher low (x ATR)", minval=0, step=0.1, group=grpEntry)
+requireSwing2AfterFlag = input.bool(true,  "Swing thu hai phai nam sau co", group=grpEntry,
+     tooltip="Nen DAY cua swing thu hai phai o sau nen bat co. Swing thu nhat duoc phep nam truoc.")
+oneTradePerFlag        = input.bool(true,  "Mot co toi da mot lenh", group=grpEntry)
+
+grpRisk    = "Rui ro"
+atrLen     = input.int(14,   "ATR length", minval=1, group=grpRisk)
+slAtrMult  = input.float(0.2, "SL bien (x ATR)", minval=0, step=0.1, group=grpRisk)
+minRR      = input.float(1.0, "RR toi thieu", minval=0, step=0.5, group=grpRisk)
+maxRR      = input.float(0.0, "RR toi da (0 = khong chan)", minval=0, step=1.0, group=grpRisk)
+
+grpExec    = "Thuc thi lenh"
+riskPct    = input.float(1.0, "Rui ro % equity moi lenh", minval=0.01, step=0.25, group=grpExec)
+minSlTicks = input.int(10, "SL toi thieu (ticks, 0 = tat)", minval=0, group=grpExec,
+     tooltip="Bo qua lenh khi khoang cach entry-SL nho hon nguong nay, tranh risk% bi tinh sai vi khoang cach qua nho.")
+
+grpShow      = "Hien thi"
+showCtx      = input.bool(true,  "Doan do + muc cho kill", group=grpShow)
+showSwings   = input.bool(true,  "Cham swing", group=grpShow)
+showZigzag   = input.bool(true,  "Zigzag", group=grpShow)
+showSignals  = input.bool(true,  "Tin hieu + SL/TP", group=grpShow)
+showRejected = input.bool(true,  "Tin hieu bi loai vi RR", group=grpShow)
+showTable    = input.bool(true,  "Bang trang thai", group=grpShow)
+showCounters = input.bool(true,  "Bang dem", group=grpShow)
+
+float ctxRsi = request.security(syminfo.tickerid, htfTf, ta.rsi(close, ctxLen)[1],
+     barmerge.gaps_off, barmerge.lookahead_on)
+
+int   n   = math.max(1, int(math.round(timeframe.in_seconds(htfTf) / timeframe.in_seconds())))
+float atr = ta.atr(atrLen)
+
+// ta.* phai goi o top level, khong duoc nam trong if — chung giu state noi bo
+float seedHigh = ta.highest(high, n)
+float seedLow  = ta.lowest(low, n)
+
+if barstate.isfirst and timeframe.in_seconds(htfTf) <= timeframe.in_seconds()
+    runtime.error("Khung boi canh phai lon hon khung chart")
+
+var bool   measHi      = false
+var float  runHigh     = na
+var float  killHigh    = na
+var int    killHighBar = na
+var bool   flagBuy     = false
+var int    flagBuyBar  = na
+var bool   flagBuyUsed = false
+
+var bool   measLo       = false
+var float  runLow       = na
+var float  killLow      = na
+var int    killLowBar   = na
+var bool   flagSell     = false
+var int    flagSellBar  = na
+var bool   flagSellUsed = false
+
+string buyEnd  = na          // chi khac na dung o nen co tat
+string sellEnd = na
+
+bool ctxOk = not na(ctxRsi) and not na(ctxRsi[1])
+bool cUp70 = ctxOk and ctxRsi[1] <= ctxHi  and ctxRsi > ctxHi
+bool cDn50 = ctxOk and ctxRsi[1] >= ctxMid and ctxRsi < ctxMid
+bool cUp50 = ctxOk and ctxRsi[1] <= ctxMid and ctxRsi > ctxMid
+bool cDn30 = ctxOk and ctxRsi[1] >= ctxLo  and ctxRsi < ctxLo
+
+// 1. noi cuc tri
+if measHi
+    runHigh := math.max(runHigh, high)
+if measLo
+    runLow := math.min(runLow, low)
+
+// 2. cham muc
+if flagBuy and high >= killHigh
+    flagBuy := false
+    buyEnd  := "KILL"
+if flagSell and low <= killLow
+    flagSell := false
+    sellEnd  := "KILL"
+
+// 3. cDn50 -> chot dinh cho kill
+if cDn50 and measHi
+    killHigh    := runHigh
+    killHighBar := bar_index
+    measHi      := false
+    flagBuy     := true
+    flagBuyBar  := bar_index
+    flagBuyUsed := false
+
+// 4. cUp50 -> chot day cho kill
+if cUp50 and measLo
+    killLow     := runLow
+    killLowBar  := bar_index
+    measLo      := false
+    flagSell    := true
+    flagSellBar := bar_index
+    flagSellUsed := false
+
+// 5. cDn30
+if cDn30
+    if flagBuy
+        flagBuy := false
+        buyEnd  := "RSIOUT"
+    if flagSell
+        flagSell := false
+        sellEnd  := "NEWLEVEL"
+    if not measLo
+        measLo := true
+        runLow := seedLow
+
+// 6. cUp70
+if cUp70
+    if flagSell
+        flagSell := false
+        sellEnd  := "RSIOUT"
+    if flagBuy
+        flagBuy := false
+        buyEnd  := "NEWLEVEL"
+    if not measHi
+        measHi  := true
+        runHigh := seedHigh
+
+// =============================================================================
+//  Tang swing (khung chart, M1) — chep tu pine/rsi2_divergence_indicator.pine,
+//  bo phan nen neo (bullBar/bearRsi/...). Doi ten cho khop spec §4.3.
+// =============================================================================
+float fastRsi = ta.rsi(close, fastLen)
+
+bool fOk = not na(fastRsi) and not na(fastRsi[1])
+bool fUp = fOk and fastRsi[1] <= fHi and fastRsi > fHi
+bool fDn = fOk and fastRsi[1] >= fLo and fastRsi < fLo
+
+// seg: 0 chua xac dinh, 1 dang leg HIGH, -1 dang leg LOW
+var int   seg         = 0
+var float segHigh     = na
+var int   segHighBar  = na
+var float segLow      = na
+var int   segLowBar   = na
+
+var float prevLowP    = na
+var int   prevLowBar  = na
+var float lastLowP    = na
+var int   lastLowBar  = na
+var float prevHighP   = na
+var int   prevHighBar = na
+var float lastHighP   = na
+var int   lastHighBar = na
+
+bool lowConf  = false
+bool highConf = false
+
+// 1. noi cuc tri: nen bien thuoc ca hai leg
+if seg == 1 and high > segHigh
+    segHigh    := high
+    segHighBar := bar_index
+if seg == -1 and low < segLow
+    segLow    := low
+    segLowBar := bar_index
+
+// 2. chuyen leg — if seg != 1 / seg != -1 phai nam TRUOC seg := 1 / seg := -1
+// de ca hai kiem tra doc gia tri seg CU (ban va: cat lai theo huong leg dang
+// mo khong lam gi, khong khoi dong lai viec theo doi cuc tri).
+if fUp
+    if seg == -1
+        lowConf    := true
+        prevLowP   := lastLowP
+        prevLowBar := lastLowBar
+        lastLowP   := segLow
+        lastLowBar := segLowBar
+    if seg != 1
+        segHigh    := high
+        segHighBar := bar_index
+    seg := 1
+if fDn
+    if seg == 1
+        highConf    := true
+        prevHighP   := lastHighP
+        prevHighBar := lastHighBar
+        lastHighP   := segHigh
+        lastHighBar := segHighBar
+    if seg != -1
+        segLow    := low
+        segLowBar := bar_index
+    seg := -1
+
+// =============================================================================
+//  KHONG mo phong vi the nhu ban indicator — strategy.* la nguon su that duy
+//  nhat cho vi the that (gate lenh moi dung strategy.position_size, thoat
+//  lenh dung strategy.exit). posOpen/posDir/posSl/posTp duoi day CHI con la
+//  cho de khoi tin hieu chep nguyen van ben duoi (no van gan gia tri cho bon
+//  bien nay) bien hop le ve mat cu phap; khong con bien nao trong so nay
+//  duoc doc lai o bat ky dau khac trong file. Doan kiem thoat dua tren
+//  posSl/posTp cham gia cua ban indicator bi bo hoan toan.
+// =============================================================================
+var bool  posOpen = false
+var int   posDir  = 0
+var float posSl   = na
+var float posTp   = na
+
+// =============================================================================
+//  Bo dem — Task 7. Phai nam TRUOC khoi tin hieu: khoi tin hieu ghi de
+//  flagBuyUsed/flagSellUsed := true ngay trong cung nen co tat, nen doc muon
+//  se lam cntKillInB/S sai.
+// =============================================================================
+var int cntFlagsB  = 0
+var int cntKillB   = 0
+var int cntKillInB = 0
+var int cntRsiOutB = 0
+var int cntNewLvlB = 0
+
+var int cntFlagsS  = 0
+var int cntKillS   = 0
+var int cntKillInS = 0
+var int cntRsiOutS = 0
+var int cntNewLvlS = 0
+
+if cDn50 and flagBuyBar == bar_index
+    cntFlagsB += 1
+if buyEnd == "KILL"
+    cntKillB += 1
+    if flagBuyUsed
+        cntKillInB += 1
+if buyEnd == "RSIOUT"
+    cntRsiOutB += 1
+if buyEnd == "NEWLEVEL"
+    cntNewLvlB += 1
+
+if cUp50 and flagSellBar == bar_index
+    cntFlagsS += 1
+if sellEnd == "KILL"
+    cntKillS += 1
+    if flagSellUsed
+        cntKillInS += 1
+if sellEnd == "RSIOUT"
+    cntRsiOutS += 1
+if sellEnd == "NEWLEVEL"
+    cntNewLvlS += 1
+
+// ---- KHOI TIN HIEU ----
+bool  buySig    = false
+bool  buyRejRr  = false
+float buyEntry  = na
+float buySl     = na
+float buyTp     = na
+float buyRr     = na
+
+if lowConf and enableBuy and flagBuy and strategy.position_size == 0 and not na(prevLowP) and not na(atr)
+    bool  hl    = lastLowP > prevLowP + hlMarginAtr * atr
+    bool  after = not requireSwing2AfterFlag or lastLowBar >= flagBuyBar
+    bool  free  = not (oneTradePerFlag and flagBuyUsed)
+    float e     = close
+    float s     = lastLowP - slAtrMult * atr
+    float t     = killHigh
+    if hl and after and free and e - s > 0
+        float r = (t - e) / (e - s)
+        if r >= minRR and (maxRR <= 0 or r <= maxRR)
+            buySig      := true
+            buyEntry    := e
+            buySl       := s
+            buyTp       := t
+            buyRr       := r
+            flagBuyUsed := true
+            posOpen     := true
+            posDir      := 1
+            posSl       := s
+            posTp       := t
+        else
+            buyRejRr := true
+            buyRr    := r
+
+bool  sellSig    = false
+bool  sellRejRr  = false
+float sellEntry  = na
+float sellSl     = na
+float sellTp     = na
+float sellRr     = na
+
+if highConf and enableSell and flagSell and strategy.position_size == 0 and not na(prevHighP) and not na(atr)
+    bool  lh    = lastHighP < prevHighP - hlMarginAtr * atr
+    bool  after = not requireSwing2AfterFlag or lastHighBar >= flagSellBar
+    bool  free  = not (oneTradePerFlag and flagSellUsed)
+    float e     = close
+    float s     = lastHighP + slAtrMult * atr
+    float t     = killLow
+    if lh and after and free and s - e > 0
+        float r = (e - t) / (s - e)
+        if r >= minRR and (maxRR <= 0 or r <= maxRR)
+            sellSig      := true
+            sellEntry    := e
+            sellSl       := s
+            sellTp       := t
+            sellRr       := r
+            flagSellUsed := true
+            posOpen      := true
+            posDir       := -1
+            posSl        := s
+            posTp        := t
+        else
+            sellRejRr := true
+            sellRr    := r
+// ---- HET KHOI TIN HIEU ----
+
+// =============================================================================
+//  Sizing + dat lenh — Task 8. TP/SL la MUC GIA CO DINH (buySl/buyTp,
+//  sellSl/sellTp da tinh xong trong khoi tin hieu o tren), nen dat
+//  strategy.exit MOT LAN duy nhat, khong can rearm. Khac
+//  rsi2_ema_swing_strategy.pine: khong co blockOpp (spec da chot bo qua tin
+//  hieu nguoc khi dang co lenh, khong dao lenh) va khong co lArm/sArm/
+//  lSigBar/sSigBar hay khoi dat lai strategy.exit o nen sau — limit= nhan
+//  thang buyTp/sellTp chu khong phai close +/- tpR * slDist nen khong can
+//  cho gia khop that de tinh lai TP.
+// =============================================================================
+string alertJson = na
+
+if buySig
+    float slDist  = buyEntry - buySl
+    bool  tooClose = minSlTicks > 0 and slDist < minSlTicks * syminfo.mintick
+    if not tooClose and slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty     = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("L", strategy.long, qty=qty, comment="BUY kill peak")
+        strategy.exit("LX", from_entry="L", stop=buySl, limit=buyTp)
+        alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BUY","setup":"KILLPEAK"' + ',"sl":' + str.tostring(buySl, "#.#####") + ',"tp_level":' + str.tostring(buyTp, "#.#####") + ',"ref_price":' + str.tostring(buyEntry, "#.#####") + '}'
+    else if tooClose
+        label.new(bar_index, low, "BUY skipped: SL too close", style=label.style_label_up,
+             color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+if sellSig
+    float slDist  = sellSl - sellEntry
+    bool  tooClose = minSlTicks > 0 and slDist < minSlTicks * syminfo.mintick
+    if not tooClose and slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty     = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("S", strategy.short, qty=qty, comment="SELL kill peak")
+        strategy.exit("SX", from_entry="S", stop=sellSl, limit=sellTp)
+        alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"SELL","setup":"KILLPEAK"' + ',"sl":' + str.tostring(sellSl, "#.#####") + ',"tp_level":' + str.tostring(sellTp, "#.#####") + ',"ref_price":' + str.tostring(sellEntry, "#.#####") + '}'
+    else if tooClose
+        label.new(bar_index, high, "SELL skipped: SL too close", style=label.style_label_down,
+             color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
+
+if not na(alertJson)
+    alert(alertJson, alert.freq_once_per_bar_close)
+
+// =============================================================================
+//  Ve — chi giu hai plotshape danh dau tin hieu tu Task 6 cua indicator.
+//  Toan bo phan ve con lai (line/label boi canh, zigzag, duong SL/TP, nhan
+//  RR bi loai) khong mang sang: nguoi dung soi tin hieu that qua danh sach
+//  lenh cua strategy, khong can hinh ve them tren chart.
+// =============================================================================
+plotshape(showSignals and buySig,  title="BUY",  style=shape.triangleup,
+     location=location.belowbar, color=color.new(color.teal, 0), size=size.small)
+plotshape(showSignals and sellSig, title="SELL", style=shape.triangledown,
+     location=location.abovebar, color=color.new(color.red, 0), size=size.small)
+
+// =============================================================================
+//  Bang dem — Task 7, chep nguyen ven tu indicator. Cot: chi tieu / BUY /
+//  SELL. Hang KILL MA HUT la hang can doi chieu giua hai file.
+// =============================================================================
+if showCounters and barstate.islast
+    int killMaHutB = cntKillB - cntKillInB
+    int killMaHutS = cntKillS - cntKillInS
+
+    var table cntTbl = table.new(position.bottom_right, 3, 7, border_width=1)
+    table.cell(cntTbl, 0, 0, "chi tieu", text_size=size.small)
+    table.cell(cntTbl, 1, 0, "BUY", text_size=size.small)
+    table.cell(cntTbl, 2, 0, "SELL", text_size=size.small)
+
+    table.cell(cntTbl, 0, 1, "co da bat", text_size=size.small)
+    table.cell(cntTbl, 1, 1, str.tostring(cntFlagsB), text_size=size.small)
+    table.cell(cntTbl, 2, 1, str.tostring(cntFlagsS), text_size=size.small)
+
+    table.cell(cntTbl, 0, 2, "ket thuc vi KILL", text_size=size.small)
+    table.cell(cntTbl, 1, 2, str.tostring(cntKillB), text_size=size.small)
+    table.cell(cntTbl, 2, 2, str.tostring(cntKillS), text_size=size.small)
+
+    table.cell(cntTbl, 0, 3, "da kip vao lenh", text_size=size.small)
+    table.cell(cntTbl, 1, 3, str.tostring(cntKillInB), text_size=size.small)
+    table.cell(cntTbl, 2, 3, str.tostring(cntKillInS), text_size=size.small)
+
+    table.cell(cntTbl, 0, 4, "KILL MA HUT", text_size=size.small, text_color=color.white,
+         bgcolor=color.new(color.red, 30))
+    table.cell(cntTbl, 1, 4, str.tostring(killMaHutB), text_size=size.small, text_color=color.white,
+         bgcolor=color.new(color.red, 30))
+    table.cell(cntTbl, 2, 4, str.tostring(killMaHutS), text_size=size.small, text_color=color.white,
+         bgcolor=color.new(color.red, 30))
+
+    table.cell(cntTbl, 0, 5, "chet vi RSIOUT", text_size=size.small)
+    table.cell(cntTbl, 1, 5, str.tostring(cntRsiOutB), text_size=size.small)
+    table.cell(cntTbl, 2, 5, str.tostring(cntRsiOutS), text_size=size.small)
+
+    table.cell(cntTbl, 0, 6, "chet vi NEWLEVEL", text_size=size.small)
+    table.cell(cntTbl, 1, 6, str.tostring(cntNewLvlB), text_size=size.small)
+    table.cell(cntTbl, 2, 6, str.tostring(cntNewLvlS), text_size=size.small)
