@@ -12,17 +12,24 @@
 //    ARMED    cho gia thung L1                           -> BROKEN
 //    BROKEN   theo doi L2/R2. RSI cat LEN midLevel       -> TIN HIEU
 //
-//  Ba duong chet, ap cho ca ARMED lan BROKEN:
-//    RSI >= cancelHi   -> ve IDLE. Len duoc toi day la thi truong da roi che
-//                         do do day, tien de cua setup mat.
-//    RSI <= cancelLo   -> sang SEEKING voi L1 MOI bat dau ngay tai day.
-//    qua maxWait nen ke tu luc ARM -> ve IDLE.
+//  HUY CUNG — ap cho ca ARMED lan BROKEN, dua setup ve IDLE:
+//    RSI >= cancelHi (BUY) / <= cancelLo (SELL). Len/xuong toi day la thi
+//      truong da roi che do do day, tien de cua setup mat.
+//    qua maxWait nen ke tu luc ARM.
 //
-//  Vi sao khong co khoi kiem phan ky rieng: R1 luon < osLevel theo dinh nghia
-//  (pha qua ban chi mo khi RSI cat xuong muc do). Ma setup chi song neu R2
-//  chua bao gio cham cancelLo. Voi mac dinh osLevel == cancelLo == 30 thi
-//  R2 > 30 > R1 luon dung -> phan ky duoc CAU TRUC dam bao. Tach cancelLo
-//  thanh input rieng de noi long duoc ma khong dong cham dinh nghia pha.
+//  VO HIEU — chi o BROKEN, va KHONG vut setup di:
+//    R2 pha luon R1, tuc RSI cua chan 2 con te hon chan 1 -> khong co phan
+//    ky. Khi do chan 2 tro thanh chan 1 MOI (L1 := L2, R1 := R2) va quay ve
+//    SEEKING de cho mot vong nua. Day la luat trung tam: nguong la R1 chu
+//    KHONG phai mot muc co dinh. R1 luon duoi osLevel theo dinh nghia, nen
+//    chan 2 duoc phep xuong duoi 30 mien la con cao hon R1 — vi du R1 = 20
+//    thi R2 = 25 van hop le.
+//    Truoc khi gia pha chan 1 thi chua co "chan 2" de noi toi, nen khong
+//    kiem o ARMED. R2 gom ca nhung nhip truoc do roi, kiem o BROKEN la du.
+//
+//  `requireR2Beyond` (mac dinh TAT) bat them dieu kien chan 2 phai nam trong
+//  r2Lo/r2Hi — dung voi y "tren 30 thi cang tot" cua dac ta goc, la diem
+//  cong chu khong phai dieu kien.
 //
 //  Xac nhan phai la mot cu CAT LEN midLevel that su, tuc RSI phai tut xuong
 //  <= midLevel sau khi gia pha day roi moi len lai. Hau qua co chu y: mot nen
@@ -59,11 +66,16 @@ midLevel = input.float(50, "Muc giua (chot chan + xac nhan)", group=grpRsi)
 osLevel  = input.float(30, "Muc qua ban (mo pha BUY)", group=grpRsi)
 
 grpCancel = "Huy setup"
-cancelHi  = input.float(70, "Huy BUY khi RSI >= (SELL: bat dau chan moi)", group=grpCancel)
-cancelLo  = input.float(30, "Huy SELL khi RSI <= (BUY: bat dau chan moi)", group=grpCancel,
-     tooltip="Chan 2 cham nguong nay la setup chet. Tach rieng khoi muc qua ban/qua mua de noi long duoc ma khong doi dinh nghia pha. Ha xuong 28 neu thay mat tin hieu o cho dang le co.")
+cancelHi  = input.float(70, "Huy BUY khi RSI >=", group=grpCancel,
+     tooltip="Len duoc toi day la thi truong da roi che do do day — tien de cua setup mat.")
+cancelLo  = input.float(30, "Huy SELL khi RSI <=", group=grpCancel)
 maxWait   = input.int(150, "Het han sau (nen, 0 = tat)", minval=0, group=grpCancel,
      tooltip="Dem tu luc ARM, tuc luc RSI cat qua muc giua lan dau.")
+
+requireR2Beyond = input.bool(false, "Bat buoc chan 2 nam trong nguong duoi day", group=grpCancel,
+     tooltip="TAT (mac dinh): nguong duy nhat la RSI cua chan 1 — chan 2 duoc phep xuong duoi 30 mien la con cao hon chan 1. BAT: them dieu kien chan 2 phai o trong r2Lo/r2Hi, dung voi y 'tren 30 thi cang tot'.")
+r2Lo = input.float(30, "  nguong chan 2 phia duoi (BUY)", group=grpCancel)
+r2Hi = input.float(70, "  nguong chan 2 phia tren (SELL)", group=grpCancel)
 
 grpRisk   = "Rui ro"
 atrLen    = input.int(14, "ATR length", minval=1, group=grpRisk)
@@ -143,24 +155,30 @@ if bSt == 2 or bSt == 3
         bR2    := rsi
         bR2Bar := bar_index
 
-// 2. huy
+// 2. huy cung — ap cho ca ARMED lan BROKEN
 if bSt == 2 or bSt == 3
     if deepHi
         bSt  := 0
         bEnd := "HUY: RSI >= " + str.tostring(cancelHi, "#.##")
-    else if deepLo
+    else if maxWait > 0 and bar_index - bArmBar > maxWait
+        bSt  := 0
+        bEnd := "HUY: het han"
+
+// 2b. vo hieu — CHI o BROKEN. Chan 2 thanh chan 1 moi, khong vut setup di.
+if bSt == 3
+    bool bBad = not na(bR2) and not na(bR1) and bR2 < bR1
+    if requireR2Beyond and not bBad
+        bBad := not na(bR2) and bR2 <= r2Lo
+    if bBad
         bSt    := 1
-        bP1    := low
-        bP1Bar := bar_index
-        bR1    := rsi
+        bP1    := bP2
+        bP1Bar := bP2Bar
+        bR1    := bR2
         bP2    := na
         bP2Bar := na
         bR2    := na
         bR2Bar := na
-        bEnd   := "HUY: RSI <= " + str.tostring(cancelLo, "#.##") + " (chan 1 moi)"
-    else if maxWait > 0 and bar_index - bArmBar > maxWait
-        bSt  := 0
-        bEnd := "HUY: het han"
+        bEnd   := "VO HIEU: chan 2 pha RSI chan 1"
 
 // 3. tin hieu — PHAI dung truoc buoc 4, xem header
 if bSt == 3 and xUpMid
@@ -213,19 +231,24 @@ if sSt == 2 or sSt == 3
     if deepLo
         sSt  := 0
         sEnd := "HUY: RSI <= " + str.tostring(cancelLo, "#.##")
-    else if deepHi
+    else if maxWait > 0 and bar_index - sArmBar > maxWait
+        sSt  := 0
+        sEnd := "HUY: het han"
+
+if sSt == 3
+    bool sBad = not na(sR2) and not na(sR1) and sR2 > sR1
+    if requireR2Beyond and not sBad
+        sBad := not na(sR2) and sR2 >= r2Hi
+    if sBad
         sSt    := 1
-        sP1    := high
-        sP1Bar := bar_index
-        sR1    := rsi
+        sP1    := sP2
+        sP1Bar := sP2Bar
+        sR1    := sR2
         sP2    := na
         sP2Bar := na
         sR2    := na
         sR2Bar := na
-        sEnd   := "HUY: RSI >= " + str.tostring(cancelHi, "#.##") + " (chan 1 moi)"
-    else if maxWait > 0 and bar_index - sArmBar > maxWait
-        sSt  := 0
-        sEnd := "HUY: het han"
+        sEnd   := "VO HIEU: chan 2 pha RSI chan 1"
 
 if sSt == 3 and xDnMid
     if enableSell
