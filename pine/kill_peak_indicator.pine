@@ -315,10 +315,6 @@ if lowConf and enableBuy and flagBuy and not posOpen and not na(prevLowP) and no
             buyTp       := t
             buyRr       := r
             flagBuyUsed := true
-            posOpen     := true
-            posDir      := 1
-            posSl       := s
-            posTp       := t
         else
             buyRejRr := true
             buyRr    := r
@@ -346,14 +342,20 @@ if highConf and enableSell and flagSell and not posOpen and not na(prevHighP) an
             sellTp       := t
             sellRr       := r
             flagSellUsed := true
-            posOpen      := true
-            posDir       := -1
-            posSl        := s
-            posTp        := t
         else
             sellRejRr := true
             sellRr    := r
 // ---- HET KHOI TIN HIEU ----
+if buySig
+    posOpen := true
+    posDir  := 1
+    posSl   := buySl
+    posTp   := buyTp
+if sellSig
+    posOpen := true
+    posDir  := -1
+    posSl   := sellSl
+    posTp   := sellTp
 
 // =============================================================================
 //  Ve — Task 6. Muc dich: nguoi dung soi tay tung setup tren chart, nen moi

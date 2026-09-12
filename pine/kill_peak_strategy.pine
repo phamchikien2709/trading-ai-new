@@ -246,16 +246,8 @@ if fDn
 // =============================================================================
 //  KHONG mo phong vi the nhu ban indicator — strategy.* la nguon su that duy
 //  nhat cho vi the that (gate lenh moi dung strategy.position_size, thoat
-//  lenh dung strategy.exit). posOpen/posDir/posSl/posTp duoi day CHI con la
-//  cho de khoi tin hieu chep nguyen van ben duoi (no van gan gia tri cho bon
-//  bien nay) bien hop le ve mat cu phap; khong con bien nao trong so nay
-//  duoc doc lai o bat ky dau khac trong file. Doan kiem thoat dua tren
-//  posSl/posTp cham gia cua ban indicator bi bo hoan toan.
+//  lenh dung strategy.exit).
 // =============================================================================
-var bool  posOpen = false
-var int   posDir  = 0
-var float posSl   = na
-var float posTp   = na
 
 // =============================================================================
 //  Bo dem — Task 7. Phai nam TRUOC khoi tin hieu: khoi tin hieu ghi de
@@ -320,10 +312,6 @@ if lowConf and enableBuy and flagBuy and strategy.position_size == 0 and not na(
             buyTp       := t
             buyRr       := r
             flagBuyUsed := true
-            posOpen     := true
-            posDir      := 1
-            posSl       := s
-            posTp       := t
         else
             buyRejRr := true
             buyRr    := r
@@ -351,10 +339,6 @@ if highConf and enableSell and flagSell and strategy.position_size == 0 and not 
             sellTp       := t
             sellRr       := r
             flagSellUsed := true
-            posOpen      := true
-            posDir       := -1
-            posSl        := s
-            posTp        := t
         else
             sellRejRr := true
             sellRr    := r
