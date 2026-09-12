@@ -311,3 +311,116 @@ if highConf and enableSell and flagSell and not posOpen and not na(prevHighP) an
             sellRejRr := true
             sellRr    := r
 // ---- HET KHOI TIN HIEU ----
+
+// =============================================================================
+//  Ve — Task 6. Muc dich: nguoi dung soi tay tung setup tren chart, nen moi
+//  lop deu nam sau if show* tuong ung de tat duoc tung lop rieng.
+// =============================================================================
+
+// ---- Buoc 1: boi canh — nen + duong muc cho kill ----
+bgcolor(showCtx and measHi ? color.new(color.red, 94) : na, title="Dang do dinh")
+bgcolor(showCtx and measLo ? color.new(color.teal, 94) : na, title="Dang do day")
+
+var line  killHiLn  = na
+var label killHiLb  = na
+
+if showCtx and cDn50 and not na(killHigh) and killHighBar == bar_index
+    killHiLn := line.new(bar_index, killHigh, bar_index + 1, killHigh,
+         color=color.new(color.orange, 0), width=2)
+    killHiLb := label.new(bar_index, killHigh, "DINH CHO KILL " + str.tostring(killHigh, format.mintick),
+         style=label.style_label_left, color=color.new(color.orange, 85),
+         textcolor=color.orange, size=size.small)
+if flagBuy and not na(killHiLn)
+    line.set_x2(killHiLn, bar_index)
+if not na(buyEnd) and not na(killHiLn)
+    line.set_x2(killHiLn, bar_index)
+    label.new(bar_index, killHigh, buyEnd, style=label.style_label_up,
+         color=color.new(color.orange, 70), textcolor=color.orange, size=size.tiny)
+
+var line  killLoLn  = na
+var label killLoLb  = na
+
+if showCtx and cUp50 and not na(killLow) and killLowBar == bar_index
+    killLoLn := line.new(bar_index, killLow, bar_index + 1, killLow,
+         color=color.new(color.teal, 0), width=2)
+    killLoLb := label.new(bar_index, killLow, "DAY CHO KILL " + str.tostring(killLow, format.mintick),
+         style=label.style_label_left, color=color.new(color.teal, 85),
+         textcolor=color.teal, size=size.small)
+if flagSell and not na(killLoLn)
+    line.set_x2(killLoLn, bar_index)
+if not na(sellEnd) and not na(killLoLn)
+    line.set_x2(killLoLn, bar_index)
+    label.new(bar_index, killLow, sellEnd, style=label.style_label_down,
+         color=color.new(color.teal, 70), textcolor=color.teal, size=size.tiny)
+
+// ---- Buoc 2: swing va zigzag ----
+if showSwings and lowConf
+    label.new(lastLowBar, lastLowP, str.tostring(lastLowP, format.mintick),
+         style=label.style_label_up, color=color.new(color.blue, 80),
+         textcolor=color.blue, size=size.tiny)
+if showSwings and highConf
+    label.new(lastHighBar, lastHighP, str.tostring(lastHighP, format.mintick),
+         style=label.style_label_down, color=color.new(color.fuchsia, 80),
+         textcolor=color.fuchsia, size=size.tiny)
+
+var int   lastPivotBar = na
+var float lastPivotPx  = na
+
+if showZigzag and (lowConf or highConf)
+    float pvPx  = lowConf ? lastLowP : lastHighP
+    int   pvBar = lowConf ? lastLowBar : lastHighBar
+    if not na(lastPivotBar)
+        line.new(lastPivotBar, lastPivotPx, pvBar, pvPx,
+             color=color.new(color.gray, 30), width=1)
+    lastPivotBar := pvBar
+    lastPivotPx  := pvPx
+
+if showSwings and lowConf and flagBuy and not na(prevLowP)
+    bool  realHl = lastLowP > prevLowP
+    color hlCol  = realHl ? color.new(color.green, 0) : color.new(color.gray, 40)
+    int   hlW    = realHl ? 2 : 1
+    line.new(prevLowBar, prevLowP, lastLowBar, lastLowP, color=hlCol, width=hlW)
+    if realHl
+        label.new(lastLowBar, lastLowP, "HIGHER LOW " + str.tostring(prevLowP, format.mintick) +
+             " -> " + str.tostring(lastLowP, format.mintick), style=label.style_label_up,
+             color=color.new(color.green, 80), textcolor=color.green, size=size.tiny)
+
+if showSwings and highConf and flagSell and not na(prevHighP)
+    bool  realLh = lastHighP < prevHighP
+    color lhCol  = realLh ? color.new(color.red, 0) : color.new(color.gray, 40)
+    int   lhW    = realLh ? 2 : 1
+    line.new(prevHighBar, prevHighP, lastHighBar, lastHighP, color=lhCol, width=lhW)
+    if realLh
+        label.new(lastHighBar, lastHighP, "LOWER HIGH " + str.tostring(prevHighP, format.mintick) +
+             " -> " + str.tostring(lastHighP, format.mintick), style=label.style_label_down,
+             color=color.new(color.red, 80), textcolor=color.red, size=size.tiny)
+
+// ---- Buoc 3: tin hieu, SL/TP va nhan bi loai vi RR ----
+plotshape(showSignals and buySig,  title="BUY",  style=shape.triangleup,
+     location=location.belowbar, color=color.new(color.teal, 0), size=size.small)
+plotshape(showSignals and sellSig, title="SELL", style=shape.triangledown,
+     location=location.abovebar, color=color.new(color.red, 0), size=size.small)
+
+var line slLn = na
+var line tpLn = na
+
+if showSignals and (buySig or sellSig)
+    float s = buySig ? buySl : sellSl
+    float t = buySig ? buyTp : sellTp
+    float r = buySig ? buyRr : sellRr
+    slLn := line.new(bar_index, s, bar_index + 1, s, color=color.new(color.red, 0),
+         width=1, style=line.style_dashed)
+    tpLn := line.new(bar_index, t, bar_index + 1, t, color=color.new(color.orange, 0),
+         width=1, style=line.style_dashed)
+    label.new(bar_index, s, "R:R " + str.tostring(r, "#.##"),
+         style=label.style_label_up, color=color.new(color.gray, 80),
+         textcolor=color.gray, size=size.tiny)
+if posOpen
+    line.set_x2(slLn, bar_index)
+    line.set_x2(tpLn, bar_index)
+
+if showRejected and (buyRejRr or sellRejRr)
+    float r = buyRejRr ? buyRr : sellRr
+    label.new(bar_index, close, "RR " + str.tostring(r, "#.##") + " < min",
+         style=label.style_label_left, color=color.new(color.gray, 85),
+         textcolor=color.gray, size=size.tiny)
