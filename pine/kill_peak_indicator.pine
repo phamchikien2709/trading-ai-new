@@ -68,6 +68,7 @@ atrLen     = input.int(14,   "ATR length", minval=1, group=grpRisk)
 slAtrMult  = input.float(0.2, "SL bien (x ATR)", minval=0, step=0.1, group=grpRisk)
 minRR      = input.float(1.0, "RR toi thieu", minval=0, step=0.5, group=grpRisk)
 maxRR      = input.float(0.0, "RR toi da (0 = khong chan)", minval=0, step=1.0, group=grpRisk)
+minSlTicks = input.int(10, "SL toi thieu (tick)", minval=0, group=grpRisk)
 
 grpShow      = "Hien thi"
 showCtx      = input.bool(true,  "Doan do + muc cho kill", group=grpShow)
@@ -81,7 +82,8 @@ showCounters = input.bool(true,  "Bang dem", group=grpShow)
 float ctxRsi = request.security(syminfo.tickerid, htfTf, ta.rsi(close, ctxLen)[1],
      barmerge.gaps_off, barmerge.lookahead_on)
 
-int   n   = math.max(1, int(math.round(timeframe.in_seconds(htfTf) / timeframe.in_seconds())))
+float tfRatio = timeframe.in_seconds(htfTf) * 1.0 / timeframe.in_seconds()
+int   n       = math.max(1, int(math.ceil(tfRatio)))
 float atr = ta.atr(atrLen)
 
 // ta.* phai goi o top level, khong duoc nam trong if — chung giu state noi bo
@@ -253,9 +255,11 @@ if posOpen
         posDir  := 0
 
 // =============================================================================
-//  Bo dem — Task 7. Phai nam TRUOC khoi tin hieu: khoi tin hieu ghi de
-//  flagBuyUsed/flagSellUsed := true ngay trong cung nen co tat, nen doc muon
-//  se lam cntKillInB/S sai.
+//  Bo dem — Task 7. Dat o day de doc buyEnd/sellEnd ngay trong nen co tat.
+//  Thu tu so voi khoi tin hieu KHONG phai rang buoc bat buoc: khoi tin hieu
+//  doi flagBuy/flagSell dang BAT, con nhanh dat buyEnd/sellEnd luon tat co
+//  truoc — hai dieu kien loai tru nhau, nen doc truoc hay sau khoi tin hieu
+//  deu cho cung ket qua.
 // =============================================================================
 var int cntFlagsB  = 0
 var int cntKillB   = 0
@@ -306,7 +310,8 @@ if lowConf and enableBuy and flagBuy and not posOpen and not na(prevLowP) and no
     float e     = close
     float s     = lastLowP - slAtrMult * atr
     float t     = killHigh
-    if hl and after and free and e - s > 0
+    bool  slOk  = not (minSlTicks > 0 and e - s < minSlTicks * syminfo.mintick)
+    if hl and after and free and e - s > 0 and slOk
         float r = (t - e) / (e - s)
         if r >= minRR and (maxRR <= 0 or r <= maxRR)
             buySig      := true
@@ -333,7 +338,8 @@ if highConf and enableSell and flagSell and not posOpen and not na(prevHighP) an
     float e     = close
     float s     = lastHighP + slAtrMult * atr
     float t     = killLow
-    if lh and after and free and s - e > 0
+    bool  slOk  = not (minSlTicks > 0 and s - e < minSlTicks * syminfo.mintick)
+    if lh and after and free and s - e > 0 and slOk
         float r = (e - t) / (s - e)
         if r >= minRR and (maxRR <= 0 or r <= maxRR)
             sellSig      := true
@@ -466,8 +472,10 @@ if posOpen and not na(tpLn)
     line.set_x2(tpLn, bar_index)
 
 if showRejected and (buyRejRr or sellRejRr)
-    float r = buyRejRr ? buyRr : sellRr
-    label.new(bar_index, close, "RR " + str.tostring(r, "#.##") + " < min",
+    float  r       = buyRejRr ? buyRr : sellRr
+    bool   overMax = maxRR > 0 and r > maxRR
+    string rrTxt   = "RR " + str.tostring(r, "#.##") + (overMax ? " > max" : " < min")
+    label.new(bar_index, close, rrTxt,
          style=label.style_label_left, color=color.new(color.gray, 85),
          textcolor=color.gray, size=size.tiny)
 

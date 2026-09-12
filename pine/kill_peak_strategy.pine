@@ -23,6 +23,12 @@
 //  cua minRR. Da biet truoc, giong luu y #2 trong header cua
 //  kill_peak_indicator.pine.
 //
+//  He qua thu hai, dang ke hon: rui ro moi lenh cung lech. Qty tinh tu
+//  slDist = close[N] - SL, nhung lenh khop o open[N+1], nen rui ro that su
+//  la riskPct * (open[N+1] - SL) / (close[N] - SL). Tren XAU khung M1 voi SL
+//  chi vai chuc cent, mot cu gap qua dem co the lam lech hai chu so phan
+//  tram. Da biet truoc va co y khong xu ly.
+//
 //  Khoi tin hieu (danh dau bang hai comment moc o dau/cuoi ben duoi) duoc
 //  chep NGUYEN VAN tu pine/kill_peak_indicator.pine — bat bien quan trong
 //  nhat: hai file phai cho tin hieu giong het nhau, khong thi nguoi soi tay
@@ -44,7 +50,7 @@
 strategy("Kill Peak Strategy", overlay=true, initial_capital=10000,
      default_qty_type=strategy.fixed, currency=currency.NONE,
      commission_type=strategy.commission.percent, commission_value=0.0,
-     process_orders_on_close=false)
+     process_orders_on_close=false, max_labels_count=500)
 
 grpCtx = "Boi canh (HTF)"
 htfTf  = input.timeframe("5", "Khung boi canh", group=grpCtx)
@@ -78,18 +84,14 @@ minSlTicks = input.int(10, "SL toi thieu (ticks, 0 = tat)", minval=0, group=grpE
      tooltip="Bo qua lenh khi khoang cach entry-SL nho hon nguong nay, tranh risk% bi tinh sai vi khoang cach qua nho.")
 
 grpShow      = "Hien thi"
-showCtx      = input.bool(true,  "Doan do + muc cho kill", group=grpShow)
-showSwings   = input.bool(true,  "Cham swing", group=grpShow)
-showZigzag   = input.bool(true,  "Zigzag", group=grpShow)
 showSignals  = input.bool(true,  "Tin hieu + SL/TP", group=grpShow)
-showRejected = input.bool(true,  "Tin hieu bi loai vi RR", group=grpShow)
-showTable    = input.bool(true,  "Bang trang thai", group=grpShow)
 showCounters = input.bool(true,  "Bang dem", group=grpShow)
 
 float ctxRsi = request.security(syminfo.tickerid, htfTf, ta.rsi(close, ctxLen)[1],
      barmerge.gaps_off, barmerge.lookahead_on)
 
-int   n   = math.max(1, int(math.round(timeframe.in_seconds(htfTf) / timeframe.in_seconds())))
+float tfRatio = timeframe.in_seconds(htfTf) * 1.0 / timeframe.in_seconds()
+int   n       = math.max(1, int(math.ceil(tfRatio)))
 float atr = ta.atr(atrLen)
 
 // ta.* phai goi o top level, khong duoc nam trong if — chung giu state noi bo
@@ -250,9 +252,11 @@ if fDn
 // =============================================================================
 
 // =============================================================================
-//  Bo dem — Task 7. Phai nam TRUOC khoi tin hieu: khoi tin hieu ghi de
-//  flagBuyUsed/flagSellUsed := true ngay trong cung nen co tat, nen doc muon
-//  se lam cntKillInB/S sai.
+//  Bo dem — Task 7. Dat o day de doc buyEnd/sellEnd ngay trong nen co tat.
+//  Thu tu so voi khoi tin hieu KHONG phai rang buoc bat buoc: khoi tin hieu
+//  doi flagBuy/flagSell dang BAT, con nhanh dat buyEnd/sellEnd luon tat co
+//  truoc — hai dieu kien loai tru nhau, nen doc truoc hay sau khoi tin hieu
+//  deu cho cung ket qua.
 // =============================================================================
 var int cntFlagsB  = 0
 var int cntKillB   = 0
@@ -303,7 +307,8 @@ if lowConf and enableBuy and flagBuy and strategy.position_size == 0 and not na(
     float e     = close
     float s     = lastLowP - slAtrMult * atr
     float t     = killHigh
-    if hl and after and free and e - s > 0
+    bool  slOk  = not (minSlTicks > 0 and e - s < minSlTicks * syminfo.mintick)
+    if hl and after and free and e - s > 0 and slOk
         float r = (t - e) / (e - s)
         if r >= minRR and (maxRR <= 0 or r <= maxRR)
             buySig      := true
@@ -330,7 +335,8 @@ if highConf and enableSell and flagSell and strategy.position_size == 0 and not 
     float e     = close
     float s     = lastHighP + slAtrMult * atr
     float t     = killLow
-    if lh and after and free and s - e > 0
+    bool  slOk  = not (minSlTicks > 0 and s - e < minSlTicks * syminfo.mintick)
+    if lh and after and free and s - e > 0 and slOk
         float r = (e - t) / (s - e)
         if r >= minRR and (maxRR <= 0 or r <= maxRR)
             sellSig      := true
@@ -358,29 +364,21 @@ string alertJson = na
 
 if buySig
     float slDist  = buyEntry - buySl
-    bool  tooClose = minSlTicks > 0 and slDist < minSlTicks * syminfo.mintick
-    if not tooClose and slDist > 0
+    if slDist > 0
         float riskUsd = strategy.equity * riskPct / 100.0
         float qty     = riskUsd / (slDist * syminfo.pointvalue)
         strategy.entry("L", strategy.long, qty=qty, comment="BUY kill peak")
         strategy.exit("LX", from_entry="L", stop=buySl, limit=buyTp)
         alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BUY","setup":"KILLPEAK"' + ',"sl":' + str.tostring(buySl, "#.#####") + ',"tp_level":' + str.tostring(buyTp, "#.#####") + ',"ref_price":' + str.tostring(buyEntry, "#.#####") + '}'
-    else if tooClose
-        label.new(bar_index, low, "BUY skipped: SL too close", style=label.style_label_up,
-             color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
 
 if sellSig
     float slDist  = sellSl - sellEntry
-    bool  tooClose = minSlTicks > 0 and slDist < minSlTicks * syminfo.mintick
-    if not tooClose and slDist > 0
+    if slDist > 0
         float riskUsd = strategy.equity * riskPct / 100.0
         float qty     = riskUsd / (slDist * syminfo.pointvalue)
         strategy.entry("S", strategy.short, qty=qty, comment="SELL kill peak")
         strategy.exit("SX", from_entry="S", stop=sellSl, limit=sellTp)
         alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"SELL","setup":"KILLPEAK"' + ',"sl":' + str.tostring(sellSl, "#.#####") + ',"tp_level":' + str.tostring(sellTp, "#.#####") + ',"ref_price":' + str.tostring(sellEntry, "#.#####") + '}'
-    else if tooClose
-        label.new(bar_index, high, "SELL skipped: SL too close", style=label.style_label_down,
-             color=color.new(color.gray, 40), textcolor=color.white, size=size.tiny)
 
 if not na(alertJson)
     alert(alertJson, alert.freq_once_per_bar_close)
