@@ -93,6 +93,7 @@ float seedLow  = ta.lowest(low, n)
 if barstate.isfirst and timeframe.in_seconds(htfTf) <= timeframe.in_seconds()
     runtime.error("Khung boi canh phai lon hon khung chart")
 
+// ---- KHOI BOI CANH HTF ----
 var bool   measHi      = false
 var float  runHigh     = na
 var float  killHigh    = na
@@ -173,6 +174,7 @@ if cUp70
     if not measHi
         measHi  := true
         runHigh := seedHigh
+// ---- HET KHOI BOI CANH HTF ----
 
 // =============================================================================
 //  Tang swing (khung chart, M1) — chep tu pine/rsi2_divergence_indicator.pine,

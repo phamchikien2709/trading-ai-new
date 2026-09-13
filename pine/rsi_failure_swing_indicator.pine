@@ -98,6 +98,7 @@ showDiv   = input.bool(true, "Duong phan ky", group=grpShow)
 showSig   = input.bool(true, "Mui ten + SL/TP", group=grpShow)
 showTable = input.bool(true, "Bang trang thai", group=grpShow)
 
+// ---- KHOI M1-A ----
 // ---------------------------------------------------------------- series
 // ta.* phai o top level: chung giu state noi bo, goi trong if la sai am tham
 float rsi = ta.rsi(close, rsiLen)
@@ -144,7 +145,6 @@ float  sEntry = na
 float  sSl    = na
 float  sTp    = na
 
-// ---- KHOI TRANG THAI BUY ----
 // 1. noi cuc tri
 if bSt == 1
     if na(bP1) or low < bP1
@@ -184,6 +184,7 @@ if bSt == 3
         bR2    := na
         bR2Bar := na
         bEnd   := "VO HIEU: chan 2 pha RSI chan 1"
+// ---- HET KHOI M1-A ----
 
 // 3. tin hieu — PHAI dung truoc buoc 4, xem header
 if bSt == 3 and xUpMid
@@ -198,6 +199,7 @@ if bSt == 3 and xUpMid
             bTp    := e + tpR * (e - s)
     bSt := 0
 
+// ---- KHOI M1-B ----
 // 4. gia pha chan 1
 if bSt == 2 and low < bP1
     bSt := 3
@@ -218,7 +220,6 @@ if bSt == 1 and xUpMid
     bR2     := rsi
     bR2Bar  := bar_index
 
-// ---- KHOI TRANG THAI SELL (guong) ----
 if sSt == 1
     if na(sP1) or high > sP1
         sP1    := high
@@ -255,6 +256,7 @@ if sSt == 3
         sR2    := na
         sR2Bar := na
         sEnd   := "VO HIEU: chan 2 pha RSI chan 1"
+// ---- HET KHOI M1-B ----
 
 if sSt == 3 and xDnMid
     if enableSell
@@ -268,6 +270,7 @@ if sSt == 3 and xDnMid
             sTp    := e - tpR * (s - e)
     sSt := 0
 
+// ---- KHOI M1-C ----
 if sSt == 2 and high > sP1
     sSt := 3
 
@@ -284,7 +287,7 @@ if sSt == 1 and xDnMid
     sP2Bar  := bar_index
     sR2     := rsi
     sR2Bar  := bar_index
-// ---- HET KHOI TRANG THAI ----
+// ---- HET KHOI M1-C ----
 
 // ---------------------------------------------------------------- pane RSI
 plot(rsi, "RSI", color=color.new(color.blue, 0), linewidth=2)
