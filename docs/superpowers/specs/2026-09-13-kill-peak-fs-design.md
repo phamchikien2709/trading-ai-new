@@ -589,7 +589,9 @@ Test bắt buộc, tối thiểu:
 5. Setup M1 đủ + cờ bật → ra lệnh, TP đúng bằng `killHigh`
 6. Setup M1 đủ + **không** cờ → không lệnh, nhưng `bSt` vẫn về 0
 7. `requireLeg2AfterFlag`: chân 2 trước cờ → chặn; sau cờ → qua
-8. Cờ bật cùng nến xác nhận → chặn (§5.5)
+8. Cờ bật cùng nến xác nhận: chân 2 từ nến trước → **chặn**; chân 2 do
+   chính nến xác nhận tạo ra → **nhận**. Cả hai nhánh đều phải có test,
+   xem §5.5
 9. `oneTradePerFlag`: lệnh thứ hai trong cùng cờ bị chặn
 10. Loại vì `minRR`, loại vì `maxRR`, loại vì `minSlTicks` — và cả ba
     trường hợp **vẫn tiêu setup** (`bSt == 0`)
