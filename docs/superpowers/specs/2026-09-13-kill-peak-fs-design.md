@@ -385,15 +385,20 @@ muộn làm RR kém (§11.1):
 | Dòng | Ý nghĩa |
 |---|---|
 | Cờ bật | tổng số cờ BUY + SELL đã bật |
-| Cờ chết: KILL | giá chạm mức mà **không** có setup M1 nào vào kịp |
+| Cờ chết: KILL | giá chạm mức mà **không** có setup M1 nào vào kịp (loại trừ cờ đã từng cho ra lệnh trước khi bị KILL) |
 | Cờ chết: RSIOUT / NEWLEVEL | bối cảnh mất trước khi giá quay lại |
-| Setup M1 xong trong cửa sổ | số lần bước 3 chạy với `gate` đúng |
 | **Loại vì RR** | `bRejRr`/`sRejRr` — con số phải nhìn đầu tiên |
-| Loại vì SL quá ngắn | `minSlTicks` |
-| Vào lệnh | `bSig`/`sSig` |
+| Tín hiệu vào lệnh | `bSig`/`sSig` |
 
-Dòng `Cờ chết: KILL` đối chiếu với `Vào lệnh` trả lời câu hỏi trung tâm:
-*trong bao nhiêu lần thị trường thật sự quay lại quét mức, ta có mặt?*
+Bảng chỉ còn năm dòng: `Setup M1 xong trong cửa sổ` và `Loại vì SL quá ngắn`
+đã bị bỏ có chủ ý lúc thi công, vì tính được chúng đòi hỏi thêm biến phụ
+mới bên trong một khối nối (J-BUY/J-SELL) — mà khối nối phải giống hệt
+indicator/strategy theo bất biến chép nguyên văn, không được phình thêm
+biến chỉ để phục vụ thống kê.
+
+Dòng `Cờ chết: KILL` đối chiếu với `Tín hiệu vào lệnh` trả lời câu hỏi
+trung tâm: *trong bao nhiêu lần thị trường thật sự quay lại quét mức, ta có
+mặt?*
 
 ---
 
@@ -515,7 +520,7 @@ viết "đã test"** ở bất cứ đâu. `force_overlay` không dùng ở file
 
 ## 12. Bất biến chép nguyên văn
 
-Năm vùng có mốc, trên hai file:
+Bảy vùng có mốc, trên hai file:
 
 | Vùng | Nguồn gốc |
 |---|---|
@@ -523,7 +528,9 @@ Năm vùng có mốc, trên hai file:
 | `KHOI M1-A` | `rsi_failure_swing_indicator.pine` |
 | `KHOI M1-B` | `rsi_failure_swing_indicator.pine` |
 | `KHOI M1-C` | `rsi_failure_swing_indicator.pine` |
-| tất cả vùng trên + J-BUY + J-SELL | `kill_peak_fs_indicator.pine` → `_strategy.pine` |
+| `KHOI J-BUY` | mới, riêng của cặp `kill_peak_fs_*` (không chép từ file khác) |
+| `KHOI J-SELL` | mới, riêng của cặp `kill_peak_fs_*` (không chép từ file khác) |
+| tất cả vùng trên | `kill_peak_fs_indicator.pine` → `_strategy.pine` |
 
 Rủi ro thật của hướng thi công này là **trôi phiên bản**: khối HTF sẽ
 tồn tại ở 4 file, khối M1 ở 4 file. Chống trôi bằng máy chứ không bằng
@@ -533,7 +540,7 @@ trí nhớ:
 toàn bộ `pine/`, tìm mọi cặp mốc `---- KHOI <ten> ----` /
 `---- HET KHOI <ten> ----`, gom theo tên, so từng dòng giữa mọi file
 chứa cùng một tên. In `LECH` + unified diff, thoát mã 1 nếu có lệch.
-Một lệnh kiểm được cả năm vùng trên chín file pine.
+Một lệnh kiểm được cả bảy vùng trên chín file pine.
 
 Luật làm việc: **sửa luật thì sửa ở file gốc rồi chép lại**, không sửa
 riêng một bên.
@@ -618,7 +625,7 @@ tiếp cho mtime giống hệt nhau và Python dùng lại bytecode cũ.
 
 ### 13.4 Đối chiếu khối
 
-`blockdiff.py` phải in `GIONG HET` cho cả năm vùng, trên mọi file.
+`blockdiff.py` phải in `GIONG HET` cho cả bảy vùng, trên mọi file.
 
 ---
 

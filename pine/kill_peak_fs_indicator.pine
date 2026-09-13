@@ -418,13 +418,16 @@ if sSt == 1 and xDnMid
 var line bLvlLn = na
 var line sLvlLn = na
 
-if showCtx and flagBuy and not flagBuy[1]
+// Dung flagBuyBar == bar_index chu khong phai canh cuoi nen (not flagBuy[1]):
+// mot co co the bat va chet trong CUNG mot nen (spec finding #2/#7), edge
+// cuoi nen se bo lo ca sinh lan tu, ve mot doan stub mot nen la dung.
+if showCtx and flagBuyBar == bar_index
     bLvlLn := line.new(bar_index, killHigh, bar_index + 1, killHigh,
          color=color.new(color.teal, 20), width=1, style=line.style_dashed)
 if showCtx and not na(bLvlLn) and flagBuy
     line.set_x2(bLvlLn, bar_index)
 
-if showCtx and flagSell and not flagSell[1]
+if showCtx and flagSellBar == bar_index
     sLvlLn := line.new(bar_index, killLow, bar_index + 1, killLow,
          color=color.new(color.red, 20), width=1, style=line.style_dashed)
 if showCtx and not na(sLvlLn) and flagSell
@@ -538,9 +541,19 @@ var int cntCtxOut = 0
 var int cntRejRr  = 0
 var int cntEntry  = 0
 
-if (flagBuy and not flagBuy[1]) or (flagSell and not flagSell[1])
+// flagBuyBar/flagSellBar duoc dat = bar_index o buoc 3 (KHOI BOI CANH HTF)
+// va khong bao gio bi xoa, nen dung == bar_index dung la "co vua bat o
+// CHINH nen nay", du song het nen hay chet ngay trong nen do (spec finding
+// #2). Canh cuoi nen (not flagBuy[1]) bo lo truong hop bat-roi-chet cung
+// nen. Nhung nen dau tien, hai bien nay con na — so sanh voi na ra false,
+// nen khong dem khong (khong co sinh gia).
+if flagBuyBar == bar_index or flagSellBar == bar_index
     cntFlag += 1
-if buyEnd == "KILL" or sellEnd == "KILL"
+// Chi dem KILL la "chet that": neu co da tung cho ra lenh (flagBuyUsed/
+// flagSellUsed) truoc khi bi KILL thi day KHONG phai mot lan bo lo — no la
+// mot lenh da vao roi TP quet trung muc (spec finding #1). oneTradePerFlag
+// de co song tiep sau tin hieu nen KILL van co the tro toi sau do.
+if (buyEnd == "KILL" and not flagBuyUsed) or (sellEnd == "KILL" and not flagSellUsed)
     cntKill += 1
 if (not na(buyEnd) and buyEnd != "KILL") or (not na(sellEnd) and sellEnd != "KILL")
     cntCtxOut += 1
@@ -561,5 +574,10 @@ if showCounters and barstate.islast
     table.cell(cntTbl, 1, 2, str.tostring(cntCtxOut), text_size=size.small)
     table.cell(cntTbl, 0, 3, "Loai vi RR", text_size=size.small)
     table.cell(cntTbl, 1, 3, str.tostring(cntRejRr), text_size=size.small)
-    table.cell(cntTbl, 0, 4, "Vao lenh", text_size=size.small)
+    // Nhan "Tin hieu vao lenh" (khong phai "Vao lenh"): dem bSig/sSig, la
+    // TIN HIEU, khong phai lenh that. Indicator khong co bo loc vi the; ben
+    // strategy thi co, nen mot tin hieu roi trung luc dang co vi the mo bi
+    // BO theo dung thiet ke (spec §9) — bang lenh cua strategy vi vay se co
+    // so lenh THAP HON con so nay, va do la ket qua dung, khong phai loi.
+    table.cell(cntTbl, 0, 4, "Tin hieu vao lenh", text_size=size.small)
     table.cell(cntTbl, 1, 4, str.tostring(cntEntry), text_size=size.small)

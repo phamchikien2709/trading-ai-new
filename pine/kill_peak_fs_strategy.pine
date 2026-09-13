@@ -7,13 +7,14 @@
 //  hai khoi noi J-BUY/J-SELL). File nay chi khac o phan thuc thi: strategy.*
 //  thay cho mo phong vi the, co sizing theo % rui ro, va gui alert JSON.
 //
-//  BAT BIEN CHEP NGUYEN VAN: nam vung co moc `// ---- KHOI <ten> ----` /
-//  `// ---- HET KHOI <ten> ----` (BOI CANH HTF, M1-A, M1-B, M1-C — bon vung
-//  cong voi vung cung ten ben rsi_failure_swing_*) phai giong het ban goc
-//  theo tung dong, chong troi bang `scratchpad/blockdiff.py`. HAI KHOI NOI
-//  J-BUY va J-SELL (than buoc 3 cua moi may trang thai) KHONG nam trong moc —
-//  khong cong cu nao tu dong canh chung — nen cung phai chep nguyen van tu
-//  indicator, doi chieu tay tung dong o buoc rieng.
+//  BAT BIEN CHEP NGUYEN VAN: bay vung co moc — `KHOI BOI CANH HTF`, `M1-A`,
+//  `M1-B`, `M1-C` (bon vung nay cung ten voi rsi_failure_swing_*), hai khoi
+//  noi `J-BUY`/`J-SELL` (than buoc 3 cua moi may trang thai, rieng cua cap
+//  kill_peak_fs_*), cong voi yeu cau tat ca cac vung do phai giong het giua
+//  indicator va strategy — moi vung phai giong het ban goc theo tung dong.
+//  Tu commit f3d42eb, `J-BUY`/`J-SELL` da co moc rieng nen
+//  `scratchpad/blockdiff.py` (chay tu goc repo) chong troi duoc CA BAY vung
+//  nay tu dong, khong con phai doi chieu tay.
 //
 //  Bo loc vi the nam HOAN TOAN NGOAI moi khoi va moi khoi noi, o ngay cho dat
 //  lenh (dieu kien vi the that == 0). Khac pine/kill_peak_strategy.pine —
