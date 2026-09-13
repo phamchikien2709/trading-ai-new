@@ -1,0 +1,181 @@
+//@version=6
+// =============================================================================
+//  Kill Peak + Failure Swing (indicator) — ghep hai engine da co trong repo.
+//
+//  Y tuong, chieu BUY (SELL soi guong): M3 chot mot muc gia dang no mot cu len
+//  quet dinh da bo lai ("muc cho kill"); M1 cho dung luc phe ban kiet suc bang
+//  mot setup failure swing day du roi moi bop co. TP = muc cho kill do, khong
+//  phai mot boi so R co dinh.
+//
+//  Ba tang, chay theo thu tu trong moi nen (spec §6):
+//    1. Boi canh M3   — chep tu pine/kill_peak_indicator.pine, vung
+//       `KHOI BOI CANH HTF`. Cho ra killHigh/killLow + flagBuy/flagSell.
+//    2. May trang thai M1 — chep tu pine/rsi_failure_swing_indicator.pine,
+//       cac vung `KHOI M1-A/B/C`, tru rieng than buoc 3 (thay bang khoi noi
+//       moi J-BUY/J-SELL). Bon trang thai IDLE/SEEKING/ARMED/BROKEN, phat
+//       hien failure swing. Noi o Task 5.
+//    3. Khoi noi — code moi cua du an nay: gate co + cua so + loc RR, dat
+//       TP = muc cho kill. Noi o Task 5.
+//
+//  BAT BIEN CHEP NGUYEN VAN: moi vung co moc `// ---- KHOI <ten> ----` /
+//  `// ---- HET KHOI <ten> ----` phai giong het ban goc theo tung dong. Chong
+//  troi phien ban bang `scratchpad/blockdiff.py` (chay tu goc repo), KHONG
+//  bang tri nho — sua luat thi sua o file goc roi chep lai qua day.
+//
+//  CHUA COMPILE DUOC O MAY NAY. Moi thu chi qua checker tinh (kp_check.py),
+//  oracle Python va doc tay. Khong duoc viet "da test"/"da verify"/"chay
+//  duoc" o bat cu dau lien quan file nay.
+//
+//  Rui ro da biet quan trong nhat (spec §11.1): diem vao (RSI M1 cat len 50
+//  LAN THU HAI) muon hon han diem vao cua kill_peak goc (RSI(2) het leg), nen
+//  RR co the kem mot cach he thong — TP (killHigh - entry) ngan di trong khi
+//  SL van treo o day chan 2. Doc dong "Loai vi RR" o bang dem TRUOC TIEN de do
+//  rui ro nay truoc khi ket luan gi ve setup.
+// =============================================================================
+indicator("Kill Peak FS", overlay=true, max_lines_count=500, max_labels_count=500)
+
+grpCtx = "Boi canh (HTF)"
+htfTf  = input.timeframe("3", "Khung boi canh", group=grpCtx)
+ctxLen = input.int(14,   "RSI boi canh", minval=2, group=grpCtx)
+ctxHi  = input.float(70, "Moc mo doan do", group=grpCtx)
+ctxMid = input.float(50, "Moc chot muc + bat co", group=grpCtx)
+ctxLo  = input.float(30, "Moc huy co", group=grpCtx)
+
+grpRsi   = "RSI (khung chart)"
+rsiLen   = input.int(14, "RSI length", minval=2, group=grpRsi)
+obLevel  = input.float(70, "Muc qua mua (mo pha SELL)", group=grpRsi)
+midLevel = input.float(50, "Muc giua (chot chan + xac nhan)", group=grpRsi)
+osLevel  = input.float(30, "Muc qua ban (mo pha BUY)", group=grpRsi)
+
+grpCancel = "Huy setup M1"
+cancelHi  = input.float(70, "Huy BUY khi RSI >=", group=grpCancel,
+     tooltip="Len duoc toi day la thi truong da roi che do do day — tien de cua setup mat.")
+cancelLo  = input.float(30, "Huy SELL khi RSI <=", group=grpCancel)
+maxWait   = input.int(150, "Het han sau (nen, 0 = tat)", minval=0, group=grpCancel,
+     tooltip="Dem tu luc ARM, tuc luc RSI cat qua muc giua lan dau.")
+
+requireR2Beyond = input.bool(false, "Bat buoc chan 2 nam trong nguong duoi day", group=grpCancel,
+     tooltip="TAT (mac dinh): nguong duy nhat la RSI cua chan 1 — chan 2 duoc phep xuong duoi 30 mien la con cao hon chan 1. BAT: them dieu kien chan 2 phai nam trong r2Lo/r2Hi.")
+r2Lo = input.float(30, "  nguong chan 2 phia duoi (BUY)", group=grpCancel)
+r2Hi = input.float(70, "  nguong chan 2 phia tren (SELL)", group=grpCancel)
+
+grpWindow = "Cua so cho kill"
+requireLeg2AfterFlag = input.bool(true, "Chan 2 phai nam sau khi bat co", group=grpWindow,
+     tooltip="Nen day cua chan 2 phai o sau nen bat co. Neu chan 2 hinh thanh truoc khi muc cho kill ton tai thi phan ky do dang noi ve mot con song khac.")
+oneTradePerFlag = input.bool(true, "Mot co toi da mot lenh", group=grpWindow)
+
+grpRisk    = "Rui ro"
+atrLen     = input.int(14,   "ATR length", minval=1, group=grpRisk)
+slAtrMult  = input.float(0.5, "SL bien (x ATR)", minval=0, step=0.1, group=grpRisk)
+minRR      = input.float(1.0, "RR toi thieu", minval=0, step=0.5, group=grpRisk)
+maxRR      = input.float(0.0, "RR toi da (0 = khong chan)", minval=0, step=1.0, group=grpRisk)
+minSlTicks = input.int(10, "SL toi thieu (tick)", minval=0, group=grpRisk)
+
+grpEntry   = "Chieu"
+enableBuy  = input.bool(true, "Enable BUY", group=grpEntry)
+enableSell = input.bool(true, "Enable SELL", group=grpEntry)
+
+grpShow      = "Hien thi"
+showCtx      = input.bool(true, "Doan do + muc cho kill", group=grpShow)
+showState    = input.bool(true, "To nen theo trang thai M1", group=grpShow)
+showDiv      = input.bool(true, "Duong phan ky chan 1 -> chan 2", group=grpShow)
+showSig      = input.bool(true, "Mui ten + nhan entry + SL/TP", group=grpShow)
+showRejected = input.bool(true, "Nhan setup bi loai vi RR", group=grpShow)
+showTable    = input.bool(true, "Bang trang thai", group=grpShow)
+showCounters = input.bool(true, "Bang dem", group=grpShow)
+
+float ctxRsi = request.security(syminfo.tickerid, htfTf, ta.rsi(close, ctxLen)[1],
+     barmerge.gaps_off, barmerge.lookahead_on)
+
+float tfRatio = timeframe.in_seconds(htfTf) * 1.0 / timeframe.in_seconds()
+int   n       = math.max(1, int(math.ceil(tfRatio)))
+
+// ta.* phai goi o top level, khong duoc nam trong if — chung giu state noi bo
+float seedHigh = ta.highest(high, n)
+float seedLow  = ta.lowest(low, n)
+
+if barstate.isfirst and timeframe.in_seconds(htfTf) <= timeframe.in_seconds()
+    runtime.error("Khung boi canh phai lon hon khung chart")
+
+// ---- KHOI BOI CANH HTF ----
+var bool   measHi      = false
+var float  runHigh     = na
+var float  killHigh    = na
+var int    killHighBar = na
+var bool   flagBuy     = false
+var int    flagBuyBar  = na
+var bool   flagBuyUsed = false
+
+var bool   measLo       = false
+var float  runLow       = na
+var float  killLow      = na
+var int    killLowBar   = na
+var bool   flagSell     = false
+var int    flagSellBar  = na
+var bool   flagSellUsed = false
+
+string buyEnd  = na          // chi khac na dung o nen co tat
+string sellEnd = na
+
+bool ctxOk = not na(ctxRsi) and not na(ctxRsi[1])
+bool cUp70 = ctxOk and ctxRsi[1] <= ctxHi  and ctxRsi > ctxHi
+bool cDn50 = ctxOk and ctxRsi[1] >= ctxMid and ctxRsi < ctxMid
+bool cUp50 = ctxOk and ctxRsi[1] <= ctxMid and ctxRsi > ctxMid
+bool cDn30 = ctxOk and ctxRsi[1] >= ctxLo  and ctxRsi < ctxLo
+
+// 1. noi cuc tri
+if measHi
+    runHigh := math.max(runHigh, high)
+if measLo
+    runLow := math.min(runLow, low)
+
+// 2. cham muc
+if flagBuy and high >= killHigh
+    flagBuy := false
+    buyEnd  := "KILL"
+if flagSell and low <= killLow
+    flagSell := false
+    sellEnd  := "KILL"
+
+// 3. cDn50 -> chot dinh cho kill
+if cDn50 and measHi
+    killHigh    := runHigh
+    killHighBar := bar_index
+    measHi      := false
+    flagBuy     := true
+    flagBuyBar  := bar_index
+    flagBuyUsed := false
+
+// 4. cUp50 -> chot day cho kill
+if cUp50 and measLo
+    killLow     := runLow
+    killLowBar  := bar_index
+    measLo      := false
+    flagSell    := true
+    flagSellBar := bar_index
+    flagSellUsed := false
+
+// 5. cDn30
+if cDn30
+    if flagBuy
+        flagBuy := false
+        buyEnd  := "RSIOUT"
+    if flagSell
+        flagSell := false
+        sellEnd  := "NEWLEVEL"
+    if not measLo
+        measLo := true
+        runLow := seedLow
+
+// 6. cUp70
+if cUp70
+    if flagSell
+        flagSell := false
+        sellEnd  := "RSIOUT"
+    if flagBuy
+        flagBuy := false
+        buyEnd  := "NEWLEVEL"
+    if not measHi
+        measHi  := true
+        runHigh := seedHigh
+// ---- HET KHOI BOI CANH HTF ----
