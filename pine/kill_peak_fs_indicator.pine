@@ -487,6 +487,12 @@ if showCtx and not na(sellEnd)
 f_stName(s) =>
     s == 1 ? "CHO HOI" : s == 2 ? "SAN SANG" : s == 3 ? "DA PHA CHAN 1" : "—"
 
+// mau so cua "RR neu vao bay gio" — bien hien thi rieng, top level, ngoai
+// moi if/khoi chep/khoi noi. Tach ra de test duoc dau duong truoc khi chia,
+// khong chi loc ket qua sau khi da chia.
+float bDen = close - (bP2 - slAtrMult * atr)
+float sDen = (sP2 + slAtrMult * atr) - close
+
 var table tbl = na
 if showTable and barstate.islast
     if na(tbl)
@@ -510,10 +516,10 @@ if showTable and barstate.islast
     table.cell(tbl, 0, 6, "M1 SELL", text_size=size.small)
     table.cell(tbl, 1, 6, f_stName(sSt), text_size=size.small)
 
-    float liveRr = flagBuy and not na(bP2) and not na(atr) ?
-         (killHigh - close) / (close - (bP2 - slAtrMult * atr)) :
-         flagSell and not na(sP2) and not na(atr) ?
-         (close - killLow) / ((sP2 + slAtrMult * atr) - close) :
+    float liveRr = flagBuy and not na(bP2) and not na(atr) and bDen > 0 ?
+         (killHigh - close) / bDen :
+         flagSell and not na(sP2) and not na(atr) and sDen > 0 ?
+         (close - killLow) / sDen :
          na
     table.cell(tbl, 0, 7, "RR neu vao bay gio", text_size=size.small)
     table.cell(tbl, 1, 7, na(liveRr) or liveRr <= 0 ? "—" : str.tostring(liveRr, "#.##"), text_size=size.small)
