@@ -135,8 +135,19 @@ bool bearSig = bear and barstate.isconfirmed and enableBear
 Trên nến lịch sử `barstate.isconfirmed` luôn đúng, nên nó chỉ chặn nến live —
 đúng thứ cần chặn.
 
-`alert()` dùng `alert.freq_once_per_bar_close` nên bản thân alert vốn đã an
-toàn; phần cần gác là phần **nhìn**.
+Cả mũi tên **và** `alert()` đều gác bằng cùng một biến `bullSig`/`bearSig` —
+tức cả hai đều đã có `barstate.isconfirmed` bên trong, không chỉ phần nhìn.
+Đây là chủ ý: mũi tên và alert luôn đồng thuận là tính chất mà công cụ đánh
+dấu này cần, nên không tách gác riêng cho từng phần.
+
+Cái giá phải trả: `barstate.isconfirmed` chỉ đúng khi có một lần script chạy
+đúng vào tick đóng nến của nến realtime đó. Nếu không có lần chạy nào rơi
+đúng lúc đó — feed chậm, hoặc người dùng mở chart giữa chừng một nến đang
+chạy — thì nến đó không sinh ra **cả** mũi tên lẫn alert. Tải lại chart sau
+đó sẽ vẽ lại mũi tên trên nến lịch sử (vì lúc đó `barstate.isconfirmed` luôn
+đúng), nhưng `alert()` thì không bao giờ bắn lại — bản chất alert chỉ bắn
+tại thời điểm chạy thực, không phải khi vẽ lại lịch sử. Vì vậy: **thấy mũi
+tên trên lịch sử không phải là bằng chứng alert đã bắn** lúc đó.
 
 ---
 
