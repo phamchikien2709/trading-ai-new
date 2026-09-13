@@ -152,3 +152,73 @@ def scan_kills(bars: Bars, labels: H4Labels, days: pd.DataFrame,
     # qua DTYPES vô điều kiện, nên tên cột LẪN dtype không thể trôi lệch giữa
     # hai nhánh — xem ghi chú ở khai báo COLUMNS/DTYPES phía trên.
     return pd.DataFrame(recs, columns=list(COLUMNS)).astype(DTYPES)
+
+
+def _mean_or_nan(x: np.ndarray) -> float:
+    x = np.asarray(x)
+    return float(np.mean(x)) if x.size else float("nan")
+
+
+def _median_or_nan(s: pd.Series) -> float:
+    return float(s.median()) if len(s) else float("nan")
+
+
+def stat_kill_rate_window(rows: pd.DataFrame) -> dict[str, float]:
+    """① Tỉ lệ kill trong cửa sổ ① — đúng đề bài của người dùng.
+
+    `w_hours_s*` được trả ra cùng chỗ và KHÔNG phải trang trí: spec §4.2 cho
+    thấy sáu slot nhận sáu độ dài cửa sổ khác nhau (4h đến 24h), nên một tỉ lệ
+    kill in trần không so được giữa các slot. Ai đọc bảng này phải thấy ngay
+    cửa sổ dài bao nhiêu.
+    """
+    out: dict[str, float] = {}
+    for s in range(N_SLOTS):
+        r = rows[rows["slot"] == s]
+        ku = r["k_up"].to_numpy(dtype=bool)
+        kd = r["k_dn"].to_numpy(dtype=bool)
+        out[f"both_s{s}"] = _mean_or_nan(ku & kd)
+        out[f"up_only_s{s}"] = _mean_or_nan(ku & ~kd)
+        out[f"dn_only_s{s}"] = _mean_or_nan(~ku & kd)
+        out[f"none_s{s}"] = _mean_or_nan(~ku & ~kd)
+        out[f"n_s{s}"] = float(len(r))
+        out[f"w_hours_s{s}"] = _median_or_nan(r["w_hours"])
+    r5 = rows[(rows["slot"] == N_SLOTS - 1) & (~rows["crosses_weekend"])]
+    out["both_s5_no_gap"] = _mean_or_nan(r5["k_up"].to_numpy(dtype=bool)
+                                         & r5["k_dn"].to_numpy(dtype=bool))
+    out["n_s5_no_gap"] = float(len(r5))
+    return out
+
+
+def stat_kill_rate_horizon(rows: pd.DataFrame, bar_seconds: int,
+                           horizons_min=HORIZONS_MIN) -> dict[str, float]:
+    """② Tỉ lệ kill tại horizon CHUNG — nhóm đối chứng công bằng.
+
+    Ở một horizon cố định, độ dài cửa sổ không còn là biến gây nhiễu; chỉ còn độ
+    rộng cây, và ③ xử lý phần đó.
+
+    Dòng không đủ bar để trả lời một horizon bị loại KHỎI horizon đó (không tính
+    là "không kill"): tính nó là không-kill là look-ahead ngược và sẽ dìm tỉ lệ
+    ở cuối mẫu. So sánh với NaN cho False nên `t_up` NaN không bao giờ thành kill.
+    """
+    out: dict[str, float] = {}
+    for h in horizons_min:
+        hb = h * 60 // bar_seconds
+        for s in range(N_SLOTS):
+            r = rows[(rows["slot"] == s) & (rows["h_avail"] >= hb)]
+            tu = r["t_up"].to_numpy(dtype="float64")
+            td = r["t_dn"].to_numpy(dtype="float64")
+            out[f"both_s{s}_h{h}"] = _mean_or_nan((tu <= hb) & (td <= hb))
+            out[f"n_s{s}_h{h}"] = float(len(r))
+    return out
+
+
+def stat_context(rows: pd.DataFrame) -> dict[str, float]:
+    """⑦ Bối cảnh. Không phải phát hiện, nhưng ③ và ⑤ không đọc được nếu thiếu."""
+    out: dict[str, float] = {}
+    for s in range(N_SLOTS):
+        r = rows[rows["slot"] == s]
+        out[f"range_usd_s{s}"] = _median_or_nan(r["range_usd"])
+        out[f"rel_range_s{s}"] = _median_or_nan(r["rel_range"])
+        out[f"day_atr_s{s}"] = _median_or_nan(r["day_atr"])
+        out[f"n_s{s}"] = float(len(r))
+    return out
