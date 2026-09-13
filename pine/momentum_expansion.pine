@@ -1,0 +1,89 @@
+//@version=6
+// =============================================================================
+//  Momentum Expansion — indicator danh dau pattern ba nen tang tien dong luong
+//
+//  Pattern: ba nen LIEN TIEP cung mau (ca ba xanh hoac ca ba do), moi nen dong
+//  cua vuot dinh (BULL) / day (BEAR) cua nen ngay truoc no, va nen cuoi cung
+//  thoat han khoi range cua nen dau tien — khong chi vuot dinh/day ma con
+//  khong con giao voi than+bong cua nen dau. Bon dieu kien doc lap, xem
+//  scratchpad momexp_oracle.py va spec 2026-09-13-momentum-expansion.
+//
+//  BANG ANH XA n1/n2/n3 <-> [0]/[1]/[2] — DOC KY TRUOC KHI SUA:
+//    nguoi dung dat ten     n1 = nen moi nhat   n2 = nen giua   n3 = nen cu nhat
+//    Pine danh chi so       [0] = n1            [1] = n2        [2] = n3
+//  Oracle Python nhan tham so THEO TEN, tuc (n3, n2, n1) — cu nhat truoc,
+//  NGUOC voi thu tu doc [0][1][2] cua Pine. Lech mot chi so o day thi pattern
+//  van compile, van ve, va SAI AM THAM — khong checker nao bat duoc, chi doc
+//  tay doi chieu voi oracle moi lo ra (xem Buoc 7 trong task-2-report.md).
+//
+//  BAT DOI XUNG CO CHU Y: n1 duoc phep CHONG LAN n2 (dieu kien 3 chi doi
+//  close[0] > high[1], khong doi low[0] phai tren high[1]); nhung dieu kien 4
+//  dung dinh cua N3 (high[2]/low[2]) chu khong phai cua n2 — n1 phai thoat
+//  han khoi range cua nen DAU TIEN. Hai dieu kien nay khong doi xung voi
+//  nhau, xem oracle va spec section 2.5.
+//
+//  Doji (close == open) khong tinh la nen xanh cung khong tinh la nen do. Moi
+//  so sanh deu dung `>` / `<` CHAT — mot nen dong dung bang dinh/day nen truoc
+//  KHONG tinh la da vuot qua.
+//
+//  CHUA COMPILE DUOC O MAY NAY. Chi qua checker tinh (kp_check.py) va doc tay
+//  doi chieu voi oracle Python (momexp_oracle.py, 17 test xanh, 7 mutation bi
+//  giet). Khong duoc viet "da test"/"da verify"/"chay duoc" ve file Pine nay.
+// =============================================================================
+indicator("Momentum Expansion", overlay=true)
+
+// ---------------------------------------------------------------- inputs
+grpDir     = "Chieu"
+enableBull = input.bool(true, "Enable BULL", group=grpDir)
+enableBear = input.bool(true, "Enable BEAR", group=grpDir)
+
+grpShow    = "Hien thi"
+showShapes = input.bool(true, "Mui ten tin hieu", group=grpShow)
+showTint   = input.bool(true, "To ba nen cua pattern", group=grpShow)
+tintTransp = input.int(85, "Do trong suot khi to", minval=0, maxval=100, group=grpShow)
+
+// ---------------------------------------------------------------- pattern
+// n1 = nen hien tai, n2 = [1], n3 = [2]. Doi chieu voi momexp_oracle.detect,
+// ham do nhan (n3, n2, n1) tuc NGUOC thu tu chi so o day.
+bool bull = close > open and close[1] > open[1] and close[2] > open[2]
+     and close[1] > high[2]
+     and close    > high[1]
+     and low      > high[2]
+
+bool bear = close < open and close[1] < open[1] and close[2] < open[2]
+     and close[1] < low[2]
+     and close    < low[1]
+     and high     < low[2]
+
+// barstate.isconfirmed luon dung tren nen lich su, nen no chi chan nen live —
+// dung thu can chan. Khong co no thi dau hieu nhap nhay roi bien mat.
+bool bullSig = bull and barstate.isconfirmed and enableBull
+bool bearSig = bear and barstate.isconfirmed and enableBear
+
+// ---------------------------------------------------------------- ve
+// To ba nen bang bgcolor voi offset am. Pattern chot o n1 nhung can to ca n3
+// va n2 nam phia trai, ma Pine khong nhin toi tuong lai duoc — offset day mau
+// sang trai dung vi tri. Khong dung box.new: Pine chan cung 500 box va mot
+// chart nhieu nam co the chua hang nghin pattern, box se tran va pattern cu
+// nhat lang le bien mat. bgcolor khong co tran nao.
+color bullTint = color.new(color.teal, tintTransp)
+color bearTint = color.new(color.red,  tintTransp)
+color tint     = bullSig ? bullTint : bearSig ? bearTint : na
+
+bgcolor(showTint ? tint : na, offset =  0, title="Nen n1")
+bgcolor(showTint ? tint : na, offset = -1, title="Nen n2")
+bgcolor(showTint ? tint : na, offset = -2, title="Nen n3")
+
+plotshape(showShapes and bullSig, title="BULL", style=shape.triangleup,
+     location=location.belowbar, color=color.new(color.teal, 0), size=size.small)
+plotshape(showShapes and bearSig, title="BEAR", style=shape.triangledown,
+     location=location.abovebar, color=color.new(color.red, 0), size=size.small)
+
+// ---------------------------------------------------------------- alert
+// level = bien cua n3 ma n1 vua thoat khoi; edge = bien gan nhat cua n1.
+// Khoang giua hai so do la vung gia pattern bo lai. File nay khong ve vung do
+// va khong tuyen bo gi ve no — chi dua hai so vao alert de dung ngoai chart.
+if bullSig
+    alert('{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BULL","setup":"MOMEXP"' + ',"level":' + str.tostring(high[2], "#.#####") + ',"edge":' + str.tostring(low, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + '}', alert.freq_once_per_bar_close)
+if bearSig
+    alert('{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BEAR","setup":"MOMEXP"' + ',"level":' + str.tostring(low[2], "#.#####") + ',"edge":' + str.tostring(high, "#.#####") + ',"close":' + str.tostring(close, "#.#####") + '}', alert.freq_once_per_bar_close)
