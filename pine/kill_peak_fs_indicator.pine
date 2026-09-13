@@ -403,3 +403,153 @@ if sSt == 1 and xDnMid
     sR2     := rsi
     sR2Bar  := bar_index
 // ---- HET KHOI M1-C ----
+
+// =============================================================================
+//  Ve (spec §7). Bat bien: moi predicate ve phai giong het predicate ra tin
+//  hieu — khong duoc tinh lai bat cu dieu kien nao. Xem canh bao dau file va
+//  Step 9 cua task-6-report.md cho phep doi chieu tung lenh ve.
+// =============================================================================
+
+// 1. duong muc cho kill, keo dai trong luc co bat
+var line bLvlLn = na
+var line sLvlLn = na
+
+if showCtx and flagBuy and not flagBuy[1]
+    bLvlLn := line.new(bar_index, killHigh, bar_index + 1, killHigh,
+         color=color.new(color.teal, 20), width=1, style=line.style_dashed)
+if showCtx and not na(bLvlLn) and flagBuy
+    line.set_x2(bLvlLn, bar_index)
+
+if showCtx and flagSell and not flagSell[1]
+    sLvlLn := line.new(bar_index, killLow, bar_index + 1, killLow,
+         color=color.new(color.red, 20), width=1, style=line.style_dashed)
+if showCtx and not na(sLvlLn) and flagSell
+    line.set_x2(sLvlLn, bar_index)
+
+// 2. to nen theo trang thai M1
+color stateCol = bSt == 1 or sSt == 1 ? color.new(color.gray, 92) :
+     bSt == 2 ? color.new(color.teal, 90) :
+     bSt == 3 ? color.new(color.teal, 80) :
+     sSt == 2 ? color.new(color.red, 90) :
+     sSt == 3 ? color.new(color.red, 80) :
+     na
+bgcolor(showState ? stateCol : na, title="Trang thai M1")
+
+// 3. duong phan ky chan 1 -> chan 2 (chi ben gia, tai nen tin hieu)
+if showDiv and bSig and not na(bP1Bar) and not na(bP2Bar)
+    line.new(bP1Bar, bP1, bP2Bar, bP2, color=color.new(color.teal, 0), width=2)
+if showDiv and sSig and not na(sP1Bar) and not na(sP2Bar)
+    line.new(sP1Bar, sP1, sP2Bar, sP2, color=color.new(color.red, 0), width=2)
+
+// 4. mui ten + nhan entry + duong SL/TP
+plotshape(showSig and bSig, title="BUY", style=shape.triangleup, location=location.belowbar,
+     color=color.new(color.teal, 0), size=size.small)
+plotshape(showSig and sSig, title="SELL", style=shape.triangledown, location=location.abovebar,
+     color=color.new(color.red, 0), size=size.small)
+
+if showSig and bSig
+    label.new(bar_index, bEntry, "BUY " + str.tostring(bEntry, format.mintick) +
+         "  R " + str.tostring(bRr, "#.##"), style=label.style_label_up,
+         color=color.new(color.teal, 20), textcolor=color.white, size=size.small)
+    line.new(bar_index, bSl, bar_index + 20, bSl,
+         color=color.new(color.red, 0), width=1, style=line.style_dashed)
+    line.new(bar_index, bTp, bar_index + 20, bTp,
+         color=color.new(color.teal, 0), width=1, style=line.style_dashed)
+if showSig and sSig
+    label.new(bar_index, sEntry, "SELL " + str.tostring(sEntry, format.mintick) +
+         "  R " + str.tostring(sRr, "#.##"), style=label.style_label_down,
+         color=color.new(color.red, 20), textcolor=color.white, size=size.small)
+    line.new(bar_index, sSl, bar_index + 20, sSl,
+         color=color.new(color.red, 0), width=1, style=line.style_dashed)
+    line.new(bar_index, sTp, bar_index + 20, sTp,
+         color=color.new(color.teal, 0), width=1, style=line.style_dashed)
+
+// 5. nhan setup bi loai vi RR, va nhan ly do co chet
+if showRejected and bRejRr
+    label.new(bar_index, low, "LOAI RR " + str.tostring(bRr, "#.##"),
+         style=label.style_label_up, color=color.new(color.gray, 70),
+         textcolor=color.gray, size=size.tiny)
+if showRejected and sRejRr
+    label.new(bar_index, high, "LOAI RR " + str.tostring(sRr, "#.##"),
+         style=label.style_label_down, color=color.new(color.gray, 70),
+         textcolor=color.gray, size=size.tiny)
+
+if showCtx and not na(buyEnd)
+    label.new(bar_index, high, buyEnd, style=label.style_label_down,
+         color=color.new(color.gray, 75), textcolor=color.gray, size=size.tiny)
+if showCtx and not na(sellEnd)
+    label.new(bar_index, low, sellEnd, style=label.style_label_up,
+         color=color.new(color.gray, 75), textcolor=color.gray, size=size.tiny)
+
+// =============================================================================
+//  Bang trang thai (spec §8.1)
+// =============================================================================
+f_stName(s) =>
+    s == 1 ? "CHO HOI" : s == 2 ? "SAN SANG" : s == 3 ? "DA PHA CHAN 1" : "—"
+
+var table tbl = na
+if showTable and barstate.islast
+    if na(tbl)
+        tbl := table.new(position.top_right, 2, 8, border_width=1)
+    table.cell(tbl, 0, 0, "RSI M3", text_size=size.small)
+    table.cell(tbl, 1, 0, na(ctxRsi) ? "—" : str.tostring(ctxRsi, "#.##"), text_size=size.small)
+    table.cell(tbl, 0, 1, "Co", text_size=size.small)
+    table.cell(tbl, 1, 1, flagBuy ? "CHO KILL BUY @ " + str.tostring(killHigh, format.mintick) :
+         flagSell ? "CHO KILL SELL @ " + str.tostring(killLow, format.mintick) :
+         "—", text_size=size.small)
+    table.cell(tbl, 0, 2, "Cho (nen)", text_size=size.small)
+    table.cell(tbl, 1, 2, flagBuy ? str.tostring(bar_index - flagBuyBar) :
+         flagSell ? str.tostring(bar_index - flagSellBar) :
+         "—", text_size=size.small)
+    table.cell(tbl, 0, 3, "M1 BUY", text_size=size.small)
+    table.cell(tbl, 1, 3, f_stName(bSt), text_size=size.small)
+    table.cell(tbl, 0, 4, "  chan 1 (gia / RSI)", text_size=size.small)
+    table.cell(tbl, 1, 4, na(bP1) ? "—" : str.tostring(bP1, format.mintick) + " / " + str.tostring(bR1, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 5, "  chan 2 (gia / RSI)", text_size=size.small)
+    table.cell(tbl, 1, 5, na(bP2) ? "—" : str.tostring(bP2, format.mintick) + " / " + str.tostring(bR2, "#.#"), text_size=size.small)
+    table.cell(tbl, 0, 6, "M1 SELL", text_size=size.small)
+    table.cell(tbl, 1, 6, f_stName(sSt), text_size=size.small)
+
+    float liveRr = flagBuy and not na(bP2) and not na(atr) ?
+         (killHigh - close) / (close - (bP2 - slAtrMult * atr)) :
+         flagSell and not na(sP2) and not na(atr) ?
+         (close - killLow) / ((sP2 + slAtrMult * atr) - close) :
+         na
+    table.cell(tbl, 0, 7, "RR neu vao bay gio", text_size=size.small)
+    table.cell(tbl, 1, 7, na(liveRr) or liveRr <= 0 ? "—" : str.tostring(liveRr, "#.##"), text_size=size.small)
+
+// =============================================================================
+//  Bang dem (spec §8.2) — nam bo dem, KHONG lam cntSetup/cntRejSl (xem brief
+//  Step 7: hai cai do can bien phu trong khoi noi, khoi noi khong duoc dong).
+// =============================================================================
+var int cntFlag   = 0
+var int cntKill   = 0
+var int cntCtxOut = 0
+var int cntRejRr  = 0
+var int cntEntry  = 0
+
+if (flagBuy and not flagBuy[1]) or (flagSell and not flagSell[1])
+    cntFlag += 1
+if buyEnd == "KILL" or sellEnd == "KILL"
+    cntKill += 1
+if (not na(buyEnd) and buyEnd != "KILL") or (not na(sellEnd) and sellEnd != "KILL")
+    cntCtxOut += 1
+if bRejRr or sRejRr
+    cntRejRr += 1
+if bSig or sSig
+    cntEntry += 1
+
+var table cntTbl = na
+if showCounters and barstate.islast
+    if na(cntTbl)
+        cntTbl := table.new(position.bottom_right, 2, 5, border_width=1)
+    table.cell(cntTbl, 0, 0, "Co bat", text_size=size.small)
+    table.cell(cntTbl, 1, 0, str.tostring(cntFlag), text_size=size.small)
+    table.cell(cntTbl, 0, 1, "Co chet: KILL", text_size=size.small)
+    table.cell(cntTbl, 1, 1, str.tostring(cntKill), text_size=size.small)
+    table.cell(cntTbl, 0, 2, "Co chet: RSIOUT/NEWLEVEL", text_size=size.small)
+    table.cell(cntTbl, 1, 2, str.tostring(cntCtxOut), text_size=size.small)
+    table.cell(cntTbl, 0, 3, "Loai vi RR", text_size=size.small)
+    table.cell(cntTbl, 1, 3, str.tostring(cntRejRr), text_size=size.small)
+    table.cell(cntTbl, 0, 4, "Vao lenh", text_size=size.small)
+    table.cell(cntTbl, 1, 4, str.tostring(cntEntry), text_size=size.small)
