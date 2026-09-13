@@ -5,7 +5,8 @@ from conftest import epoch_for_ny
 from rsi_fvg.bars import Bars
 from rsi_fvg.h4_grid import N_SLOTS, aggregate_days, label_h4
 from rsi_fvg.h4_kill import (COLUMNS, DTYPES, scan_kills, stat_context,
-                             stat_kill_rate_horizon, stat_kill_rate_window)
+                             stat_kill_rate_horizon, stat_kill_rate_standardized,
+                             stat_kill_rate_window)
 
 NY_HOURS = (18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4,
             5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
@@ -309,3 +310,64 @@ def test_empty_slot_gives_nan_not_zero():
     rows = mk_rows([{"slot": 0, "k_up": True, "k_dn": True}])
     got = stat_kill_rate_window(rows)
     assert np.isnan(got["both_s3"]) and got["n_s3"] == 0.0
+
+
+def _width_confounded_rows():
+    """Hai slot có phân phối độ rộng LỆCH NHAU nhưng tỉ lệ kill TRONG TỪNG
+    decile BẰNG NHAU.
+
+    slot 0: 80 cây hẹp + 20 cây rộng      slot 4: 20 hẹp + 80 rộng
+    hẹp: kill 80%      rộng: kill 20%     (giống nhau ở cả hai slot)
+
+    thô:  s0 = .8*.8 + .2*.2 = 0.68       s4 = .2*.8 + .8*.2 = 0.32
+    trọng số gộp: hẹp 0.5, rộng 0.5
+    chuẩn hoá: cả hai = .5*.8 + .5*.2 = 0.50
+    """
+    recs = []
+    for slot, n_narrow, n_wide in ((0, 80, 20), (4, 20, 80)):
+        for rel, n in ((1.0, n_narrow), (5.0, n_wide)):
+            killed = int(round(n * (0.8 if rel == 1.0 else 0.2)))
+            for i in range(n):
+                t = 1.0 if i < killed else np.nan
+                recs.append({"slot": slot, "rel_range": rel, "h_avail": 10_000,
+                             "t_up": t, "t_dn": t})
+    return mk_rows(recs)
+
+
+def test_standardization_removes_the_width_confound():
+    """Bằng chứng rằng ③ kiểm soát được độ rộng. Nếu test này fail thì mọi kết
+    luận của nghiên cứu vô giá trị (spec §8 mục 6)."""
+    got = stat_kill_rate_standardized(_width_confounded_rows(), bar_seconds=60,
+                                      horizon_min=720, n_deciles=2)
+    assert abs(got["raw_s0"] - 0.68) < 1e-9
+    assert abs(got["raw_s4"] - 0.32) < 1e-9
+    assert abs(got["raw_s0"] - got["raw_s4"]) > 0.3     # thô: khác xa
+    assert abs(got["std_s0"] - 0.50) < 1e-9
+    assert abs(got["std_s4"] - 0.50) < 1e-9
+    assert abs(got["std_s0"] - got["std_s4"]) < 1e-9    # chuẩn hoá: bằng nhau
+
+
+def test_deciles_used_is_reported():
+    """Slot chỉ có quan sát ở một decile -> deciles_used = 1, và con số chuẩn
+    hoá của nó không so được với slot có đủ hai decile."""
+    recs = [{"slot": 0, "rel_range": 1.0, "h_avail": 10_000, "t_up": 1.0, "t_dn": 1.0}] * 50
+    recs += [{"slot": 1, "rel_range": 5.0, "h_avail": 10_000, "t_up": 1.0, "t_dn": 1.0}] * 50
+    got = stat_kill_rate_standardized(mk_rows(recs), bar_seconds=60,
+                                      horizon_min=720, n_deciles=2)
+    assert got["deciles_used_s0"] == 1.0 and got["deciles_used_s1"] == 1.0
+
+
+def test_standardized_filters_by_horizon_availability_and_finite_rel_range():
+    recs = [
+        {"slot": 0, "rel_range": 1.0, "h_avail": 10_000, "t_up": 1.0, "t_dn": 1.0},
+        {"slot": 0, "rel_range": 1.0, "h_avail": 2, "t_up": 1.0, "t_dn": 1.0},
+        {"slot": 0, "rel_range": np.nan, "h_avail": 10_000, "t_up": 1.0, "t_dn": 1.0},
+    ]
+    got = stat_kill_rate_standardized(mk_rows(recs), bar_seconds=60,
+                                      horizon_min=720, n_deciles=2)
+    assert got["n_s0"] == 1.0
+
+
+def test_standardized_empty_gives_nan():
+    got = stat_kill_rate_standardized(mk_rows([]), bar_seconds=60)
+    assert np.isnan(got["std_s0"]) and np.isnan(got["std_s5"])

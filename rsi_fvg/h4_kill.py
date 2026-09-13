@@ -212,6 +212,62 @@ def stat_kill_rate_horizon(rows: pd.DataFrame, bar_seconds: int,
     return out
 
 
+def stat_kill_rate_standardized(rows: pd.DataFrame, bar_seconds: int,
+                                horizon_min: int = STD_HORIZON_MIN,
+                                n_deciles: int = 10) -> dict[str, float]:
+    """③ Tỉ lệ kill CHUẨN HOÁ theo độ rộng — đại lượng mà luật §10 dùng.
+
+    Tồn tại vì hai cây mà nghiên cứu hỏi là hai cây HẸP NHẤT trong sáu (spec
+    §2.3a: range median 4,76 và 6,22 USD so với 13,20 của slot 4). Xác suất bị
+    quét cả hai đầu là hàm giảm theo độ rộng, nên so sánh thô giữa các slot chủ
+    yếu đang đo độ rộng, không đo hành vi.
+
+    Chuẩn hoá trực tiếp: mỗi slot ra một số = trung bình tỉ lệ kill trong từng
+    decile, lấy trọng số theo phân phối decile GỘP. Đọc là "nếu slot này có cùng
+    phân phối độ rộng như trung bình sáu slot, tỉ lệ kill của nó là bao nhiêu".
+
+    `deciles_used_s*` KHÔNG phải trang trí: một slot chuẩn hoá trên 4/10 decile
+    thì con số của nó không so được với slot chuẩn hoá trên 10/10.
+
+    Tính tại horizon CHUNG (mặc định 720 phút), không tại cửa sổ ①, vì ① có độ
+    dài khác nhau giữa các slot nên không so được (spec §4.2).
+    """
+    hb = horizon_min * 60 // bar_seconds
+    out: dict[str, float] = {}
+    if rows.empty:
+        for s in range(N_SLOTS):
+            out[f"std_s{s}"] = out[f"raw_s{s}"] = float("nan")
+            out[f"deciles_used_s{s}"] = out[f"n_s{s}"] = 0.0
+        return out
+
+    r = rows[(rows["h_avail"] >= hb) & np.isfinite(rows["rel_range"])].copy()
+    if r.empty:
+        for s in range(N_SLOTS):
+            out[f"std_s{s}"] = out[f"raw_s{s}"] = float("nan")
+            out[f"deciles_used_s{s}"] = out[f"n_s{s}"] = 0.0
+        return out
+
+    r["killed"] = ((r["t_up"].to_numpy(dtype="float64") <= hb)
+                   & (r["t_dn"].to_numpy(dtype="float64") <= hb))
+    r["dec"] = pd.qcut(r["rel_range"], n_deciles, labels=False, duplicates="drop")
+    weights = r["dec"].value_counts(normalize=True)      # phân phối GỘP
+
+    for s in range(N_SLOTS):
+        rs = r[r["slot"] == s]
+        out[f"raw_s{s}"] = _mean_or_nan(rs["killed"].to_numpy(dtype=bool))
+        out[f"n_s{s}"] = float(len(rs))
+        if rs.empty:
+            out[f"std_s{s}"] = float("nan")
+            out[f"deciles_used_s{s}"] = 0.0
+            continue
+        by_dec = rs.groupby("dec")["killed"].mean()
+        w = weights.reindex(by_dec.index)
+        total = float(w.sum())
+        out[f"std_s{s}"] = float((by_dec * w).sum() / total) if total > 0 else float("nan")
+        out[f"deciles_used_s{s}"] = float(len(by_dec))
+    return out
+
+
 def stat_context(rows: pd.DataFrame) -> dict[str, float]:
     """⑦ Bối cảnh. Không phải phát hiện, nhưng ③ và ⑤ không đọc được nếu thiếu."""
     out: dict[str, float] = {}
