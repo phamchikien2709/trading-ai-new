@@ -7,7 +7,7 @@
 //  hai khoi noi J-BUY/J-SELL). File nay chi khac o phan thuc thi: strategy.*
 //  thay cho mo phong vi the, co sizing theo % rui ro, va gui alert JSON.
 //
-//  BAT BIEN CHEP NGUYEN VAN: bay vung co moc — `KHOI BOI CANH HTF`, `M1-A`,
+//  BAT BIEN CHEP NGUYEN VAN: SAU vung co moc — `KHOI BOI CANH HTF`, `M1-A`,
 //  `M1-B`, `M1-C` (bon vung nay cung ten voi rsi_failure_swing_*), hai khoi
 //  noi `J-BUY`/`J-SELL` (than buoc 3 cua moi may trang thai, rieng cua cap
 //  kill_peak_fs_*), cong voi yeu cau tat ca cac vung do phai giong het giua

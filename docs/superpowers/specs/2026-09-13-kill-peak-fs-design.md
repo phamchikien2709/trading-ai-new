@@ -520,7 +520,8 @@ viết "đã test"** ở bất cứ đâu. `force_overlay` không dùng ở file
 
 ## 12. Bất biến chép nguyên văn
 
-Bảy vùng có mốc, trên hai file:
+**Sáu** vùng có mốc, trên hai file. Hàng cuối bảng dưới đây không phải
+một vùng thứ bảy — nó là yêu cầu áp lên cả sáu vùng:
 
 | Vùng | Nguồn gốc |
 |---|---|
@@ -540,7 +541,7 @@ trí nhớ:
 toàn bộ `pine/`, tìm mọi cặp mốc `---- KHOI <ten> ----` /
 `---- HET KHOI <ten> ----`, gom theo tên, so từng dòng giữa mọi file
 chứa cùng một tên. In `LECH` + unified diff, thoát mã 1 nếu có lệch.
-Một lệnh kiểm được cả bảy vùng trên chín file pine.
+Một lệnh kiểm được cả sáu vùng trên mọi file pine.
 
 Luật làm việc: **sửa luật thì sửa ở file gốc rồi chép lại**, không sửa
 riêng một bên.
@@ -625,7 +626,14 @@ tiếp cho mtime giống hệt nhau và Python dùng lại bytecode cũ.
 
 ### 13.4 Đối chiếu khối
 
-`blockdiff.py` phải in `GIONG HET` cho cả bảy vùng, trên mọi file.
+`blockdiff.py` phải thoát mã 0, với `GIONG HET` cho cả sáu vùng của cặp
+`kill_peak_fs_*`.
+
+Ngoài sáu vùng đó, công cụ còn bắt gặp vùng `TIN HIEU` của cặp
+`kill_peak_*` (dự án trước). Vùng đó **cố ý** lệch đúng hai dòng gate vị
+thế và được ghi đích danh trong `blockdiff_except.txt`, nên nó in
+`LECH CO PHEP` chứ **không** phải `GIONG HET`. Đòi `GIONG HET` cho mọi
+vùng trên mọi file là sai — đó là điều kiện không bao giờ đạt được.
 
 ---
 
