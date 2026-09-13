@@ -1,0 +1,464 @@
+//@version=6
+// =============================================================================
+//  Kill Peak + Failure Swing (strategy) — sizing + lenh that de backtest.
+//
+//  Cung ba tang voi pine/kill_peak_fs_indicator.pine (doc header ben do de
+//  biet kien truc, ba trang thai boi canh M3, may trang thai M1 bon buoc,
+//  hai khoi noi J-BUY/J-SELL). File nay chi khac o phan thuc thi: strategy.*
+//  thay cho mo phong vi the, co sizing theo % rui ro, va gui alert JSON.
+//
+//  BAT BIEN CHEP NGUYEN VAN: nam vung co moc `// ---- KHOI <ten> ----` /
+//  `// ---- HET KHOI <ten> ----` (BOI CANH HTF, M1-A, M1-B, M1-C — bon vung
+//  cong voi vung cung ten ben rsi_failure_swing_*) phai giong het ban goc
+//  theo tung dong, chong troi bang `scratchpad/blockdiff.py`. HAI KHOI NOI
+//  J-BUY va J-SELL (than buoc 3 cua moi may trang thai) KHONG nam trong moc —
+//  khong cong cu nao tu dong canh chung — nen cung phai chep nguyen van tu
+//  indicator, doi chieu tay tung dong o buoc rieng.
+//
+//  Bo loc vi the nam HOAN TOAN NGOAI moi khoi va moi khoi noi, o ngay cho dat
+//  lenh (dieu kien vi the that == 0). Khac pine/kill_peak_strategy.pine —
+//  o do than khoi tin hieu con duoc phep lech DUNG MOT dong (gate lenh doi
+//  "not posOpen" sang dieu kien vi the that) — o day KHONG CO NGOAI LE NAO:
+//  moi vung co moc va ca hai khoi noi phai khop 100% voi indicator. Dat bo
+//  loc ngoai khoi giu duoc dieu do, doi lai may trang thai chay y het nhau du
+//  dang co lenh hay khong, nen mot tin hieu roi trung luc dang co vi the don
+//  gian bi BO — no khong bao gio thanh lenh, khong xuat hien trong bang lenh
+//  cua strategy, trong khi mui ten tin hieu van ve binh thuong. Do la co y:
+//  giu cot trang thai cua hai file khop nhau tuyet doi de doi chieu duoc.
+//
+//  Vi bSl/bTp va sSl/sTp da la MUC GIA tuyet doi, tinh xong ngay trong khoi
+//  noi, strategy.exit dat MOT LAN la du — khong can cho lenh khop roi tinh
+//  lai TP nhu cac file dung TP = boi so R tren gia khop that.
+//
+//  Luu y (co y khong xu ly): entry tinh tren close cua nen xac nhan, nhung
+//  lenh that khop o open cua nen SAU do, nen rui ro thuc te cua moi lenh
+//  (riskPct * (open[N+1] - SL) / (close[N] - SL)) lech chut so voi riskPct
+//  danh nghia. Mot cu gap qua dem tren XAU co the lam lech vai phan tram —
+//  giong luu y cung loai trong header kill_peak_strategy.pine.
+//
+//  CHUA COMPILE DUOC O MAY NAY. Moi thu chi qua checker tinh (kp_check.py),
+//  blockdiff.py va doc tay. Khong duoc viet "da test"/"da verify"/"chay
+//  duoc" o bat cu dau lien quan file nay.
+// =============================================================================
+strategy("Kill Peak FS Strategy", overlay=true, initial_capital=10000,
+     default_qty_type=strategy.fixed, currency=currency.NONE,
+     commission_type=strategy.commission.percent, commission_value=0.0,
+     process_orders_on_close=false, max_labels_count=500)
+
+grpCtx = "Boi canh (HTF)"
+htfTf  = input.timeframe("3", "Khung boi canh", group=grpCtx)
+ctxLen = input.int(14,   "RSI boi canh", minval=2, group=grpCtx)
+ctxHi  = input.float(70, "Moc mo doan do", group=grpCtx)
+ctxMid = input.float(50, "Moc chot muc + bat co", group=grpCtx)
+ctxLo  = input.float(30, "Moc huy co", group=grpCtx)
+
+grpRsi   = "RSI (khung chart)"
+rsiLen   = input.int(14, "RSI length", minval=2, group=grpRsi)
+obLevel  = input.float(70, "Muc qua mua (mo pha SELL)", group=grpRsi)
+midLevel = input.float(50, "Muc giua (chot chan + xac nhan)", group=grpRsi)
+osLevel  = input.float(30, "Muc qua ban (mo pha BUY)", group=grpRsi)
+
+grpCancel = "Huy setup M1"
+cancelHi  = input.float(70, "Huy BUY khi RSI >=", group=grpCancel,
+     tooltip="Len duoc toi day la thi truong da roi che do do day — tien de cua setup mat.")
+cancelLo  = input.float(30, "Huy SELL khi RSI <=", group=grpCancel)
+maxWait   = input.int(150, "Het han sau (nen, 0 = tat)", minval=0, group=grpCancel,
+     tooltip="Dem tu luc ARM, tuc luc RSI cat qua muc giua lan dau.")
+
+requireR2Beyond = input.bool(false, "Bat buoc chan 2 nam trong nguong duoi day", group=grpCancel,
+     tooltip="TAT (mac dinh): nguong duy nhat la RSI cua chan 1 — chan 2 duoc phep xuong duoi 30 mien la con cao hon chan 1. BAT: them dieu kien chan 2 phai nam trong r2Lo/r2Hi.")
+r2Lo = input.float(30, "  nguong chan 2 phia duoi (BUY)", group=grpCancel)
+r2Hi = input.float(70, "  nguong chan 2 phia tren (SELL)", group=grpCancel)
+
+grpWindow = "Cua so cho kill"
+requireLeg2AfterFlag = input.bool(true, "Chan 2 phai nam sau khi bat co", group=grpWindow,
+     tooltip="Nen day cua chan 2 phai o sau nen bat co. Neu chan 2 hinh thanh truoc khi muc cho kill ton tai thi phan ky do dang noi ve mot con song khac.")
+oneTradePerFlag = input.bool(true, "Mot co toi da mot lenh", group=grpWindow)
+
+grpRisk    = "Rui ro"
+atrLen     = input.int(14,   "ATR length", minval=1, group=grpRisk)
+slAtrMult  = input.float(0.5, "SL bien (x ATR)", minval=0, step=0.1, group=grpRisk)
+minRR      = input.float(1.0, "RR toi thieu", minval=0, step=0.5, group=grpRisk)
+maxRR      = input.float(0.0, "RR toi da (0 = khong chan)", minval=0, step=1.0, group=grpRisk)
+minSlTicks = input.int(10, "SL toi thieu (tick)", minval=0, group=grpRisk)
+
+grpEntry   = "Chieu"
+enableBuy  = input.bool(true, "Enable BUY", group=grpEntry)
+enableSell = input.bool(true, "Enable SELL", group=grpEntry)
+
+grpShow = "Hien thi"
+showSig = input.bool(true, "Mui ten + nhan entry + SL/TP", group=grpShow)
+
+grpExec = "Thuc thi lenh"
+riskPct = input.float(1.0, "Rui ro % equity moi lenh", minval=0.01, step=0.25, group=grpExec)
+
+float ctxRsi = request.security(syminfo.tickerid, htfTf, ta.rsi(close, ctxLen)[1],
+     barmerge.gaps_off, barmerge.lookahead_on)
+
+float tfRatio = timeframe.in_seconds(htfTf) * 1.0 / timeframe.in_seconds()
+int   n       = math.max(1, int(math.ceil(tfRatio)))
+
+// ta.* phai goi o top level, khong duoc nam trong if — chung giu state noi bo
+float seedHigh = ta.highest(high, n)
+float seedLow  = ta.lowest(low, n)
+
+if barstate.isfirst and timeframe.in_seconds(htfTf) <= timeframe.in_seconds()
+    runtime.error("Khung boi canh phai lon hon khung chart")
+
+// ---- KHOI BOI CANH HTF ----
+var bool   measHi      = false
+var float  runHigh     = na
+var float  killHigh    = na
+var int    killHighBar = na
+var bool   flagBuy     = false
+var int    flagBuyBar  = na
+var bool   flagBuyUsed = false
+
+var bool   measLo       = false
+var float  runLow       = na
+var float  killLow      = na
+var int    killLowBar   = na
+var bool   flagSell     = false
+var int    flagSellBar  = na
+var bool   flagSellUsed = false
+
+string buyEnd  = na          // chi khac na dung o nen co tat
+string sellEnd = na
+
+bool ctxOk = not na(ctxRsi) and not na(ctxRsi[1])
+bool cUp70 = ctxOk and ctxRsi[1] <= ctxHi  and ctxRsi > ctxHi
+bool cDn50 = ctxOk and ctxRsi[1] >= ctxMid and ctxRsi < ctxMid
+bool cUp50 = ctxOk and ctxRsi[1] <= ctxMid and ctxRsi > ctxMid
+bool cDn30 = ctxOk and ctxRsi[1] >= ctxLo  and ctxRsi < ctxLo
+
+// 1. noi cuc tri
+if measHi
+    runHigh := math.max(runHigh, high)
+if measLo
+    runLow := math.min(runLow, low)
+
+// 2. cham muc
+if flagBuy and high >= killHigh
+    flagBuy := false
+    buyEnd  := "KILL"
+if flagSell and low <= killLow
+    flagSell := false
+    sellEnd  := "KILL"
+
+// 3. cDn50 -> chot dinh cho kill
+if cDn50 and measHi
+    killHigh    := runHigh
+    killHighBar := bar_index
+    measHi      := false
+    flagBuy     := true
+    flagBuyBar  := bar_index
+    flagBuyUsed := false
+
+// 4. cUp50 -> chot day cho kill
+if cUp50 and measLo
+    killLow     := runLow
+    killLowBar  := bar_index
+    measLo      := false
+    flagSell    := true
+    flagSellBar := bar_index
+    flagSellUsed := false
+
+// 5. cDn30
+if cDn30
+    if flagBuy
+        flagBuy := false
+        buyEnd  := "RSIOUT"
+    if flagSell
+        flagSell := false
+        sellEnd  := "NEWLEVEL"
+    if not measLo
+        measLo := true
+        runLow := seedLow
+
+// 6. cUp70
+if cUp70
+    if flagSell
+        flagSell := false
+        sellEnd  := "RSIOUT"
+    if flagBuy
+        flagBuy := false
+        buyEnd  := "NEWLEVEL"
+    if not measHi
+        measHi  := true
+        runHigh := seedHigh
+// ---- HET KHOI BOI CANH HTF ----
+
+// Bon bien nay KHONG co trong rsi_failure_swing (da kiem: 0 lan xuat hien).
+// Chung phuc vu bo loc RR, von la thu moi cua script nay. Dat chung trong
+// vung chep la pha bat bien chep nguyen van ngay tu dong dau.
+float bRr    = na
+bool  bRejRr = false
+float sRr    = na
+bool  sRejRr = false
+
+// ---- KHOI M1-A ----
+// ---------------------------------------------------------------- series
+// ta.* phai o top level: chung giu state noi bo, goi trong if la sai am tham
+float rsi = ta.rsi(close, rsiLen)
+float atr = ta.atr(atrLen)
+
+bool ok     = not na(rsi) and not na(rsi[1]) and not na(atr)
+bool xDnOs  = ok and rsi[1] >= osLevel  and rsi < osLevel
+bool xUpOb  = ok and rsi[1] <= obLevel  and rsi > obLevel
+bool xUpMid = ok and rsi[1] <= midLevel and rsi > midLevel
+bool xDnMid = ok and rsi[1] >= midLevel and rsi < midLevel
+bool deepLo = ok and rsi <= cancelLo
+bool deepHi = ok and rsi >= cancelHi
+
+// trang thai: 0 IDLE, 1 SEEKING, 2 ARMED, 3 BROKEN
+var int   bSt     = 0
+var float bP1     = na
+var float bR1     = na
+var int   bP1Bar  = na
+var int   bArmBar = na
+var float bP2     = na
+var int   bP2Bar  = na
+var float bR2     = na
+var int   bR2Bar  = na
+
+var int   sSt     = 0
+var float sP1     = na
+var float sR1     = na
+var int   sP1Bar  = na
+var int   sArmBar = na
+var float sP2     = na
+var int   sP2Bar  = na
+var float sR2     = na
+var int   sR2Bar  = na
+
+// chi khac na dung o nen setup chet / ra tin hieu
+string bEnd   = na
+string sEnd   = na
+bool   bSig   = false
+bool   sSig   = false
+float  bEntry = na
+float  bSl    = na
+float  bTp    = na
+float  sEntry = na
+float  sSl    = na
+float  sTp    = na
+
+// 1. noi cuc tri
+if bSt == 1
+    if na(bP1) or low < bP1
+        bP1    := low
+        bP1Bar := bar_index
+    if na(bR1) or rsi < bR1
+        bR1 := rsi
+if bSt == 2 or bSt == 3
+    if na(bP2) or low < bP2
+        bP2    := low
+        bP2Bar := bar_index
+    if na(bR2) or rsi < bR2
+        bR2    := rsi
+        bR2Bar := bar_index
+
+// 2. huy cung — ap cho ca ARMED lan BROKEN
+if bSt == 2 or bSt == 3
+    if deepHi
+        bSt  := 0
+        bEnd := "HUY: RSI >= " + str.tostring(cancelHi, "#.##")
+    else if maxWait > 0 and bar_index - bArmBar > maxWait
+        bSt  := 0
+        bEnd := "HUY: het han"
+
+// 2b. vo hieu — CHI o BROKEN. Chan 2 thanh chan 1 moi, khong vut setup di.
+if bSt == 3
+    bool bBad = not na(bR2) and not na(bR1) and bR2 < bR1
+    if requireR2Beyond and not bBad
+        bBad := not na(bR2) and bR2 <= r2Lo
+    if bBad
+        bSt    := 1
+        bP1    := bP2
+        bP1Bar := bP2Bar
+        bR1    := bR2
+        bP2    := na
+        bP2Bar := na
+        bR2    := na
+        bR2Bar := na
+        bEnd   := "VO HIEU: chan 2 pha RSI chan 1"
+// ---- HET KHOI M1-A ----
+
+// 3. tin hieu — PHAI dung truoc buoc 4, xem header.
+//    Day la KHOI NOI: thay cho than buoc 3 cua rsi_failure_swing. TP khong
+//    con la boi so R ma la killHigh, va co them gate co + cua so + loc RR.
+//    Vi tri cua no truoc buoc 4 la load-bearing: mot nen vua thung bP1 vua
+//    dong cua tren 50 chi dat BROKEN, khong ra tin hieu.
+if bSt == 3 and xUpMid
+    bool gate = enableBuy and flagBuy and not na(killHigh)
+         and (not requireLeg2AfterFlag or bP2Bar >= flagBuyBar)
+         and not (oneTradePerFlag and flagBuyUsed)
+    if gate
+        float e = close
+        float s = bP2 - slAtrMult * atr
+        bool  slOk = not (minSlTicks > 0 and e - s < minSlTicks * syminfo.mintick)
+        if e - s > 0 and slOk and killHigh - e > 0
+            float r = (killHigh - e) / (e - s)
+            if r >= minRR and (maxRR <= 0 or r <= maxRR)
+                bSig        := true
+                bEntry      := e
+                bSl         := s
+                bTp         := killHigh
+                bRr         := r
+                flagBuyUsed := true
+            else
+                bRejRr := true
+                bRr    := r
+    bSt := 0
+
+// ---- KHOI M1-B ----
+// 4. gia pha chan 1
+if bSt == 2 and low < bP1
+    bSt := 3
+
+// 5. mo pha qua ban
+if bSt == 0 and xDnOs
+    bSt    := 1
+    bP1    := low
+    bP1Bar := bar_index
+    bR1    := rsi
+
+// 6. chot chan 1, vu trang
+if bSt == 1 and xUpMid
+    bSt     := 2
+    bArmBar := bar_index
+    bP2     := low
+    bP2Bar  := bar_index
+    bR2     := rsi
+    bR2Bar  := bar_index
+
+if sSt == 1
+    if na(sP1) or high > sP1
+        sP1    := high
+        sP1Bar := bar_index
+    if na(sR1) or rsi > sR1
+        sR1 := rsi
+if sSt == 2 or sSt == 3
+    if na(sP2) or high > sP2
+        sP2    := high
+        sP2Bar := bar_index
+    if na(sR2) or rsi > sR2
+        sR2    := rsi
+        sR2Bar := bar_index
+
+if sSt == 2 or sSt == 3
+    if deepLo
+        sSt  := 0
+        sEnd := "HUY: RSI <= " + str.tostring(cancelLo, "#.##")
+    else if maxWait > 0 and bar_index - sArmBar > maxWait
+        sSt  := 0
+        sEnd := "HUY: het han"
+
+if sSt == 3
+    bool sBad = not na(sR2) and not na(sR1) and sR2 > sR1
+    if requireR2Beyond and not sBad
+        sBad := not na(sR2) and sR2 >= r2Hi
+    if sBad
+        sSt    := 1
+        sP1    := sP2
+        sP1Bar := sP2Bar
+        sR1    := sR2
+        sP2    := na
+        sP2Bar := na
+        sR2    := na
+        sR2Bar := na
+        sEnd   := "VO HIEU: chan 2 pha RSI chan 1"
+// ---- HET KHOI M1-B ----
+
+// 3. tin hieu chieu SELL — guong hoan toan cua J-BUY o tren.
+if sSt == 3 and xDnMid
+    bool gate = enableSell and flagSell and not na(killLow)
+         and (not requireLeg2AfterFlag or sP2Bar >= flagSellBar)
+         and not (oneTradePerFlag and flagSellUsed)
+    if gate
+        float e = close
+        float s = sP2 + slAtrMult * atr
+        bool  slOk = not (minSlTicks > 0 and s - e < minSlTicks * syminfo.mintick)
+        if s - e > 0 and slOk and e - killLow > 0
+            float r = (e - killLow) / (s - e)
+            if r >= minRR and (maxRR <= 0 or r <= maxRR)
+                sSig         := true
+                sEntry       := e
+                sSl          := s
+                sTp          := killLow
+                sRr          := r
+                flagSellUsed := true
+            else
+                sRejRr := true
+                sRr    := r
+    sSt := 0
+
+// ---- KHOI M1-C ----
+if sSt == 2 and high > sP1
+    sSt := 3
+
+if sSt == 0 and xUpOb
+    sSt    := 1
+    sP1    := high
+    sP1Bar := bar_index
+    sR1    := rsi
+
+if sSt == 1 and xDnMid
+    sSt     := 2
+    sArmBar := bar_index
+    sP2     := high
+    sP2Bar  := bar_index
+    sR2     := rsi
+    sR2Bar  := bar_index
+// ---- HET KHOI M1-C ----
+
+// =============================================================================
+//  Sizing + dat lenh
+//
+//  bSl/bTp va sSl/sTp da la MUC GIA tuyet doi, tinh xong trong khoi noi o
+//  tren, nen strategy.exit dat MOT LAN la du — khong can cho lenh khop roi
+//  tinh lai TP nhu cac file dung TP = boi so R tren gia khop that.
+//
+//  Bo loc vi the nam O DAY chu khong trong khoi noi: khoi noi phai giong
+//  het indicator tung ky tu. Nghia la may trang thai van chay va van tieu
+//  setup ngay ca khi dang co lenh — dung nhu indicator — chi rieng lenh la
+//  khong duoc dat. Khong dao lenh, khong xep hang.
+// =============================================================================
+string alertJson = na
+
+if bSig and strategy.position_size == 0
+    float slDist = bEntry - bSl
+    if slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty     = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("L", strategy.long, qty=qty, comment="BUY kill peak fs")
+        strategy.exit("LX", from_entry="L", stop=bSl, limit=bTp)
+        alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BUY","setup":"KILLPEAKFS"' + ',"entry":' + str.tostring(bEntry, "#.#####") + ',"sl":' + str.tostring(bSl, "#.#####") + ',"tp":' + str.tostring(bTp, "#.#####") + '}'
+
+if sSig and strategy.position_size == 0
+    float slDist = sSl - sEntry
+    if slDist > 0
+        float riskUsd = strategy.equity * riskPct / 100.0
+        float qty     = riskUsd / (slDist * syminfo.pointvalue)
+        strategy.entry("S", strategy.short, qty=qty, comment="SELL kill peak fs")
+        strategy.exit("SX", from_entry="S", stop=sSl, limit=sTp)
+        alertJson := '{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"SELL","setup":"KILLPEAKFS"' + ',"entry":' + str.tostring(sEntry, "#.#####") + ',"sl":' + str.tostring(sSl, "#.#####") + ',"tp":' + str.tostring(sTp, "#.#####") + '}'
+
+if not na(alertJson)
+    alert(alertJson, alert.freq_once_per_bar_close)
+
+// =============================================================================
+//  Ve — chi hai plotshape danh dau tin hieu. Toan bo phan ve cua indicator
+//  (duong muc cho kill, to nen theo trang thai, duong phan ky, nhan entry/
+//  SL/TP, nhan setup bi loai vi RR, bang trang thai, bang dem) khong mang
+//  sang: file nay khong co pane rieng va khong co bang — nguoi backtest doc
+//  ket qua qua bang lenh cua strategy.
+//
+//  Mui ten ve theo TIN HIEU (bSig/sSig), khong phai lenh khop that. Mot tin
+//  hieu roi trung luc dang co vi the van co mui ten ma khong co lenh trong
+//  bang lenh — co y, de doi chieu duoc bang mat voi indicator.
+// =============================================================================
+plotshape(showSig and bSig, title="BUY", style=shape.triangleup, location=location.belowbar,
+     color=color.new(color.teal, 0), size=size.small)
+plotshape(showSig and sSig, title="SELL", style=shape.triangledown, location=location.abovebar,
+     color=color.new(color.red, 0), size=size.small)
