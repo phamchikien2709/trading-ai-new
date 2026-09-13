@@ -38,6 +38,9 @@
 //  Thu tu buoc 3 (tin hieu) truoc buoc 4 (pha) la thu thuc thi luat nay.
 //
 //  Entry = close nen xac nhan. SL = L2 -/+ slAtrMult*ATR. TP = tpR lan R.
+//  Tin hieu co khoang cach entry-SL nho hon minSlTicks bi bo. Bo loc do co
+//  mat trong ca file strategy voi cung mac dinh: hai file phai bao cung mot
+//  tap tin hieu.
 //
 //  Khong repaint: moi thu doc tu nen da dong, nhan ve tai nen xac nhan va
 //  khong bao gio dich. Chi bang trang thai va cuc tri dang chay la cap nhat
@@ -51,7 +54,7 @@
 //  doi `overlay=false` thanh `true`, bo het `force_overlay=true`, va chuyen
 //  phan ve RSI sang mot indicator rieng.
 //
-//  Kiem chung: may trang thai nay duoc dung lai bang Python va co 13 test
+//  Kiem chung: may trang thai nay duoc dung lai bang Python va co 20 test
 //  xanh (scratchpad, khong commit) — Pine khong compile duoc o may viet ra
 //  no. Phan VE va BANG khong co test, chi soat tay.
 // =============================================================================
@@ -81,6 +84,8 @@ grpRisk   = "Rui ro"
 atrLen    = input.int(14, "ATR length", minval=1, group=grpRisk)
 slAtrMult = input.float(0.5, "SL bien (x ATR)", minval=0, step=0.1, group=grpRisk)
 tpR       = input.float(3.0, "Take profit (R)", minval=0.1, step=0.5, group=grpRisk)
+minSlTicks = input.int(10, "SL toi thieu (ticks, 0 = tat)", minval=0, group=grpRisk,
+     tooltip="Bo qua tin hieu khi khoang cach entry-SL nho hon nguong nay. Co mat trong CA indicator lan strategy va cung mac dinh: hai file phai bao cung mot tap tin hieu, khong thi nguoi soi tay va nguoi backtest se thay hai ket qua khac nhau.")
 
 grpEntry   = "Chieu"
 enableBuy  = input.bool(true, "Enable BUY", group=grpEntry)
@@ -185,7 +190,8 @@ if bSt == 3 and xUpMid
     if enableBuy
         float e = close
         float s = bP2 - slAtrMult * atr
-        if e - s > 0
+        bool slOk = not (minSlTicks > 0 and e - s < minSlTicks * syminfo.mintick)
+        if e - s > 0 and slOk
             bSig   := true
             bEntry := e
             bSl    := s
@@ -254,7 +260,8 @@ if sSt == 3 and xDnMid
     if enableSell
         float e = close
         float s = sP2 + slAtrMult * atr
-        if s - e > 0
+        bool slOk = not (minSlTicks > 0 and s - e < minSlTicks * syminfo.mintick)
+        if s - e > 0 and slOk
             sSig   := true
             sEntry := e
             sSl    := s
