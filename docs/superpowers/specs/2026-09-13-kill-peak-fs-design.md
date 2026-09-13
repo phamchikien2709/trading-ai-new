@@ -278,9 +278,24 @@ bật ở nến `flagBuyBar` và chỉ tắt khi chết — nên `flagBuyBar <=
 bar_index` luôn đúng. Chỉ **đáy chân 2** cần kiểm tường minh.
 
 Trường hợp biên: cờ bật **cùng nến** với xác nhận M1
-(`flagBuyBar == bar_index`). Khi đó `bP2Bar < bar_index` nên
-`requireLeg2AfterFlag` chặn. Đúng ý muốn — chân 2 hình thành trước khi
-mức chờ kill tồn tại.
+(`flagBuyBar == bar_index`). Kết quả phụ thuộc vào chân 2 nằm ở đâu, và
+**cả hai nhánh đều cố ý**:
+
+- `bP2Bar < bar_index` — đáy chân 2 hình thành từ nến trước.
+  `requireLeg2AfterFlag` **chặn**: chân 2 có trước khi mức chờ kill tồn
+  tại, nên phân kì đó nói về một con sóng khác.
+- `bP2Bar == bar_index` — chính nến xác nhận tạo đáy chân 2 mới (một nến
+  đảo chiều bạo: vừa thủng xuống tạo đáy, vừa đóng cửa trên 50). Khi đó
+  `bP2Bar >= flagBuyBar` đúng và setup **được nhận**.
+
+Nhánh thứ hai là đúng ý: nến N không "trước" nến N, và lý do để loại ở
+nhánh thứ nhất — chân 2 có trước mức chờ kill — không áp vào trường hợp
+đồng thời. Muốn siết lại thì đổi `>=` thành `>`, một ký tự.
+
+Bản trước của mục này khẳng định trường hợp cùng nến **luôn** bị chặn.
+Khẳng định đó sai: nó bỏ sót nhánh chân 2 tạo ngay tại nến xác nhận.
+Phát hiện trong vòng review Task 3 bằng một phản ví dụ chạy được, và
+oracle có test ghim cả hai nhánh để chúng không trôi.
 
 ### 5.6 Cờ chết giữa chừng: không nối vào máy M1
 
