@@ -1655,9 +1655,16 @@ var int cntEntry  = 0
 
 `cntFlag` tăng khi `flagBuy and not flagBuy[1]` hoặc `flagSell and not flagSell[1]`. `cntKill` tăng khi `buyEnd == "KILL"` hoặc `sellEnd == "KILL"`. `cntCtxOut` tăng khi `buyEnd`/`sellEnd` khác `na` và khác `"KILL"`. `cntRejRr` tăng theo `bRejRr`/`sRejRr`. `cntEntry` tăng theo `bSig`/`sSig`.
 
-`cntSetup` và `cntRejSl` cần biến phụ đặt **trong khối nối** — mà khối nối là code riêng của file này nên được phép. Thêm vào J-BUY, ngay sau `if gate`: một `bool bGateOk = true` để đếm; và trong nhánh `slOk` sai: `bRejSl := true`. **Nếu làm vậy thì J-BUY của indicator và của strategy phải giống hệt nhau** — nhớ chép sang ở Task 7.
+**BẮT BUỘC bỏ `cntSetup` và `cntRejSl`, chỉ làm năm bộ đếm trên.**
 
-Cách đơn giản hơn, khuyến nghị: bỏ `cntSetup` và `cntRejSl` khỏi bảng, giữ năm dòng còn lại. Năm dòng đó đã trả lời được câu hỏi trung tâm (`cntKill` so với `cntEntry`) và không phải đụng vào khối nối. **Chọn cách này trừ khi có lý do rõ ràng để làm khác.**
+Hai bộ đếm đó cần biến phụ đặt **trong khối nối**. Không được làm: khối nối
+là phần code mới duy nhất của dự án mà `blockdiff.py` **không** phủ — chỉ có
+một bước đối chiếu tay ở Task 7 Step 8 canh nó. Thêm biến vào đó là mở thêm
+một mặt trôi phiên bản ngay tại chỗ mỏng nhất của hàng phòng thủ.
+
+Năm bộ đếm còn lại đã trả lời được câu hỏi trung tâm: `cntKill` so với
+`cntEntry` cho biết *trong bao nhiêu lần thị trường thật sự quay lại quét
+mức, ta có mặt?*
 
 Đặt bảng ở `position.bottom_right` để không đè bảng trạng thái.
 
