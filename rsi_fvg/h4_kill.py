@@ -229,6 +229,15 @@ def stat_kill_rate_standardized(rows: pd.DataFrame, bar_seconds: int,
     `deciles_used_s*` KHÔNG phải trang trí: một slot chuẩn hoá trên 4/10 decile
     thì con số của nó không so được với slot chuẩn hoá trên 10/10.
 
+    `min_cell_n_s*` là tín hiệu ô thưa (spec §4.3 ③ bước 2: "báo bảng slot ×
+    decile với n từng ô, để ô thưa lộ ra") ở dạng máy đọc được: n nhỏ nhất
+    trong số các ô (decile) mà slot đó thực sự dùng. Không có nó,
+    `deciles_used_s{k} == n_deciles` đọc như "chuẩn hoá đầy đủ", nhưng một ô
+    trong số đó có thể chỉ có một quan sát và vẫn được gán trọng số gộp đầy đủ
+    — đúng lỗ hổng mà bảng slot × decile của spec tồn tại để lộ ra. Bảng đầy đủ
+    (60 ô) không thuộc `dict[str, float]` này; nó thuộc `summary.md` (task
+    khác) — hàm này chỉ mang phần tối thiểu bộ chạy null cần: giá trị nhỏ nhất.
+
     Tính tại horizon CHUNG (mặc định 720 phút), không tại cửa sổ ①, vì ① có độ
     dài khác nhau giữa các slot nên không so được (spec §4.2).
     """
@@ -238,6 +247,7 @@ def stat_kill_rate_standardized(rows: pd.DataFrame, bar_seconds: int,
         for s in range(N_SLOTS):
             out[f"std_s{s}"] = out[f"raw_s{s}"] = float("nan")
             out[f"deciles_used_s{s}"] = out[f"n_s{s}"] = 0.0
+            out[f"min_cell_n_s{s}"] = 0.0
         return out
 
     r = rows[(rows["h_avail"] >= hb) & np.isfinite(rows["rel_range"])].copy()
@@ -245,6 +255,7 @@ def stat_kill_rate_standardized(rows: pd.DataFrame, bar_seconds: int,
         for s in range(N_SLOTS):
             out[f"std_s{s}"] = out[f"raw_s{s}"] = float("nan")
             out[f"deciles_used_s{s}"] = out[f"n_s{s}"] = 0.0
+            out[f"min_cell_n_s{s}"] = 0.0
         return out
 
     r["killed"] = ((r["t_up"].to_numpy(dtype="float64") <= hb)
@@ -259,12 +270,15 @@ def stat_kill_rate_standardized(rows: pd.DataFrame, bar_seconds: int,
         if rs.empty:
             out[f"std_s{s}"] = float("nan")
             out[f"deciles_used_s{s}"] = 0.0
+            out[f"min_cell_n_s{s}"] = 0.0
             continue
+        cell_n = rs.groupby("dec").size()
         by_dec = rs.groupby("dec")["killed"].mean()
         w = weights.reindex(by_dec.index)
         total = float(w.sum())
         out[f"std_s{s}"] = float((by_dec * w).sum() / total) if total > 0 else float("nan")
         out[f"deciles_used_s{s}"] = float(len(by_dec))
+        out[f"min_cell_n_s{s}"] = float(cell_n.min())
     return out
 
 

@@ -371,3 +371,28 @@ def test_standardized_filters_by_horizon_availability_and_finite_rel_range():
 def test_standardized_empty_gives_nan():
     got = stat_kill_rate_standardized(mk_rows([]), bar_seconds=60)
     assert np.isnan(got["std_s0"]) and np.isnan(got["std_s5"])
+    assert got["min_cell_n_s0"] == 0.0 and got["min_cell_n_s5"] == 0.0
+
+
+def test_min_cell_n_reports_the_thinnest_decile():
+    """Spec §4.3 ③ bước 2: bảng slot × decile phải để ô thưa lộ ra.
+    `min_cell_n_s{k}` là dạng máy đọc được của việc đó. Pooled hẹp/rộng cân
+    bằng 100/100 (49+51 hẹp, 1+99 rộng) để `pd.qcut` chia đúng hai decile sạch
+    (không rơi vào suy biến một bin). Slot 0 có một decile dày (49) và một
+    decile chỉ 1 dòng -> `min_cell_n_s0` phải bắt được ô mỏng nhất (1), không
+    phải trung bình hay tổng; slot 1 dày ở cả hai decile (51 và 99) ->
+    `min_cell_n_s1` phải là 51, không phải 99."""
+    recs = [{"slot": 0, "rel_range": 1.0, "h_avail": 10_000,
+             "t_up": 1.0, "t_dn": 1.0}] * 49
+    recs += [{"slot": 0, "rel_range": 5.0, "h_avail": 10_000,
+              "t_up": np.nan, "t_dn": np.nan}]
+    recs += [{"slot": 1, "rel_range": 1.0, "h_avail": 10_000,
+              "t_up": 1.0, "t_dn": 1.0}] * 51
+    recs += [{"slot": 1, "rel_range": 5.0, "h_avail": 10_000,
+              "t_up": 1.0, "t_dn": 1.0}] * 99
+    got = stat_kill_rate_standardized(mk_rows(recs), bar_seconds=60,
+                                      horizon_min=720, n_deciles=2)
+    assert got["deciles_used_s0"] == 2.0
+    assert got["min_cell_n_s0"] == 1.0
+    assert got["deciles_used_s1"] == 2.0
+    assert got["min_cell_n_s1"] == 51.0
