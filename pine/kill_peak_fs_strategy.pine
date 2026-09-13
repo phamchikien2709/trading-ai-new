@@ -43,7 +43,7 @@
 strategy("Kill Peak FS Strategy", overlay=true, initial_capital=10000,
      default_qty_type=strategy.fixed, currency=currency.NONE,
      commission_type=strategy.commission.percent, commission_value=0.0,
-     process_orders_on_close=false, max_labels_count=500)
+     process_orders_on_close=false, max_lines_count=500, max_labels_count=500)
 
 grpCtx = "Boi canh (HTF)"
 htfTf  = input.timeframe("3", "Khung boi canh", group=grpCtx)
@@ -284,6 +284,7 @@ if bSt == 3
         bEnd   := "VO HIEU: chan 2 pha RSI chan 1"
 // ---- HET KHOI M1-A ----
 
+// ---- KHOI J-BUY ----
 // 3. tin hieu — PHAI dung truoc buoc 4, xem header.
 //    Day la KHOI NOI: thay cho than buoc 3 cua rsi_failure_swing. TP khong
 //    con la boi so R ma la killHigh, va co them gate co + cua so + loc RR.
@@ -310,6 +311,7 @@ if bSt == 3 and xUpMid
                 bRejRr := true
                 bRr    := r
     bSt := 0
+// ---- HET KHOI J-BUY ----
 
 // ---- KHOI M1-B ----
 // 4. gia pha chan 1
@@ -370,6 +372,7 @@ if sSt == 3
         sEnd   := "VO HIEU: chan 2 pha RSI chan 1"
 // ---- HET KHOI M1-B ----
 
+// ---- KHOI J-SELL ----
 // 3. tin hieu chieu SELL — guong hoan toan cua J-BUY o tren.
 if sSt == 3 and xDnMid
     bool gate = enableSell and flagSell and not na(killLow)
@@ -392,6 +395,7 @@ if sSt == 3 and xDnMid
                 sRejRr := true
                 sRr    := r
     sSt := 0
+// ---- HET KHOI J-SELL ----
 
 // ---- KHOI M1-C ----
 if sSt == 2 and high > sP1
