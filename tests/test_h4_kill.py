@@ -587,3 +587,63 @@ def test_build_stats_binds_bar_seconds():
     for name, fn in table.items():
         got = fn(rows)
         assert isinstance(got, dict) and got, name
+
+
+def test_run_null_row_equals_run_grid_at_the_same_offset_with_the_same_kwargs():
+    """Hai đột biến sống sót qua cả suite trước khi có test này, và cả hai đều
+    im lặng:
+
+      1. `run_null` dùng `anchor_offset=0` thay vì `off`. Mọi dòng null trở nên
+         giống hệt nhau ở cả 308 cột, và phán quyết §10 lật từ "lưới thật vượt
+         mọi lưới null" thành "thua mọi lưới null" — báo cáo vẫn in ra một bảng
+         trông bình thường. `test_run_null_one_row_per_offset` không bắt được
+         vì cột `anchor_offset` do chính `run_null` ghi từ mảng `offsets`, chứ
+         không bao giờ đến từ `run_grid`.
+      2. `run_null` quên chuyển tiếp `**agg_kw`. Đường thật nhận kwargs của
+         caller, đường null lặng lẽ dùng default — vi phạm đúng bất biến
+         §3.3.3 ("cùng một hàm, cùng tham số, ở cả hai đường") mà docstring
+         khẳng định. Quét `min_fraction` ở Task 10 sẽ cho hai đường hai cỡ mẫu
+         khác nhau, không dấu hiệu nào trên báo cáo.
+
+    So thẳng từng khoá với `run_grid` chặn cả hai: dòng null thứ i phải là
+    ĐÚNG cái mà `run_grid` cho ở offset thứ i, với đúng kwargs ấy.
+
+    `atr_period=2` là phi-default (default 14) nên nó thực sự phân biệt được
+    nhánh quên-chuyển-tiếp: với 20 ngày, ATR chu kỳ 14 còn NaN ở phần lớn mẫu.
+    """
+    bars = build([(f"2026-01-{d:02d}", CALM) for d in range(5, 25)])
+    offs = make_offsets("", 3600, 6, 1, cycle_seconds=DAY_SECONDS)
+    nulls = run_null(bars, 3600, offs, atr_period=2)
+
+    for i, off in enumerate(offs):
+        flat, _ = run_grid(bars, 3600, int(off), atr_period=2)
+        row = nulls.iloc[i]
+        assert row["anchor_offset"] == int(off)
+        for k, want in flat.items():
+            got = row[k]
+            assert (np.isnan(want) and np.isnan(got)) or want == got, (off, k, want, got)
+
+    # và lưới PHẢI thật sự dịch: ít nhất một đại lượng đổi giữa các offset
+    stat_cols = [c for c in nulls.columns if c != "anchor_offset"]
+    assert any(nulls[c].nunique(dropna=False) > 1 for c in stat_cols)
+
+
+def test_run_grid_uses_the_stats_table_it_is_given():
+    """Nhánh `stats` tường minh: `quarter_stats` có test tương đương, bản H4
+    thì không — bỏ qua tham số `stats` là một đột biến sống sót."""
+    bars = build([(f"2026-01-{d:02d}", CALM) for d in range(5, 15)])
+    flat, _ = run_grid(bars, 3600, stats={"chi_boi_canh": stat_context},
+                       atr_period=2)
+    assert all(k.startswith("chi_boi_canh.") for k in flat)
+    assert "chi_boi_canh.range_usd_s0" in flat
+    assert not any(k.startswith("window.") for k in flat)
+
+
+def test_build_stats_returns_a_fresh_dict_each_call():
+    """Lời hứa của docstring, và nó chịu lực thật: một dict dùng chung sẽ đóng
+    băng `bar_seconds` của lần gọi ĐẦU vào hai `partial`. Một driver quét nhiều
+    khung trong cùng tiến trình (M1 rồi H1) sẽ chạy H1 với `bar_seconds=60` —
+    mọi horizon và mọi đại lượng chuẩn hoá sai 60 lần, không một lỗi nào."""
+    assert build_stats(3600) is not build_stats(3600)
+    assert build_stats(60)["horizon"].keywords == {"bar_seconds": 60}
+    assert build_stats(3600)["horizon"].keywords == {"bar_seconds": 3600}

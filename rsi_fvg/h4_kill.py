@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 
 from .bars import Bars
-from .h4_grid import DAY_SECONDS, N_SLOTS, H4Labels, aggregate_days, label_h4
+from .h4_grid import N_SLOTS, H4Labels, aggregate_days, label_h4
 
 H_MAX_MIN = 1440
 HORIZONS_MIN = (60, 120, 240, 480, 720, 1200, 1440)
@@ -435,7 +435,7 @@ def run_grid(bars: Bars, bar_seconds: int, anchor_offset: int = 0,
 def run_null(bars: Bars, bar_seconds: int, offsets: np.ndarray,
              stats: dict | None = None, **agg_kw) -> pd.DataFrame:
     """Một dòng mỗi lưới null. Offset sinh bằng
-    `quarter_stats.make_offsets(..., cycle_seconds=DAY_SECONDS)`."""
+    `quarter_stats.make_offsets(..., cycle_seconds=h4_grid.DAY_SECONDS)`."""
     recs = []
     for off in np.asarray(offsets, dtype="int64"):
         rec: dict[str, float] = {"anchor_offset": int(off)}
