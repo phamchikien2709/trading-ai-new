@@ -366,3 +366,25 @@ def test_stats_default_is_none_not_a_shared_dict():
     import inspect
     for fn in (run_grid, run_null):
         assert inspect.signature(fn).parameters["stats"].default is None
+
+
+def test_make_offsets_unchanged_without_cycle_seconds():
+    """Hai study Quarterly Theory dùng hàm này và số của chúng đã công bố.
+    Thêm tham số không được đổi một bit hành vi cũ."""
+    a = make_offsets("session", 300, 5, 20260909)
+    b = make_offsets("session", 300, 5, 20260909, cycle_seconds=None)
+    np.testing.assert_array_equal(a, b)
+    # chu kỳ session = 4 * 21600 = 86400 s; lưới 300 s; loại lân cận 600 s
+    full = make_offsets("session", 300, 10_000, 1)
+    assert full.min() == 600 and full.max() == 86400 - 600
+    assert full.size == (86400 // 300) - 3      # bỏ 0, 300, và 86400-300
+
+
+def test_make_offsets_cycle_seconds_overrides_tier():
+    """Lưới H4 có chu kỳ NGÀY (6 slot), không khớp giả định 4-quarter của TIERS,
+    nên nó truyền cycle_seconds và tier bị bỏ qua hoàn toàn."""
+    got = make_offsets("", 3600, 10_000, 1, cycle_seconds=86400)
+    assert got.min() == 3600 and got.max() == 86400 - 3600
+    assert got.size == 23
+    # tier rác cũng không sao khi đã có cycle_seconds
+    assert make_offsets("khong-ton-tai", 3600, 5, 1, cycle_seconds=86400).size == 5

@@ -185,7 +185,8 @@ STATS = {
 }
 
 
-def make_offsets(tier: str, bar_seconds: int, shifts: int, seed: int) -> np.ndarray:
+def make_offsets(tier: str, bar_seconds: int, shifts: int, seed: int,
+                 cycle_seconds: int | None = None) -> np.ndarray:
     """Offset neo cho mô hình null (spec §4.1).
 
     Ba quyết định, cả ba đều có lý do:
@@ -202,8 +203,14 @@ def make_offsets(tier: str, bar_seconds: int, shifts: int, seed: int) -> np.ndar
     Số offset khả dụng là (4L / bar_seconds) trừ lân cận 0, nên tầng q90 chỉ có
     69 lưới null dù xin bao nhiêu. Hàm trả về ít hơn `shifts` khi hết mốc — KHÔNG
     lặp lại mốc, vì mốc trùng sẽ làm phân phối null hẹp giả tạo.
+
+    `cycle_seconds` cho caller tự đặt độ dài chu kỳ thay vì tra `TIERS`. Nghiên
+    cứu H4 kill (spec riêng §5.1) có chu kỳ NGÀY với SÁU slot, không khớp giả
+    định bốn-quarter của `TIERS`, nên nó truyền 86400 và `tier` bị bỏ qua. Không
+    truyền thì hành vi cũ không đổi một bit — hai study Quarterly Theory phụ
+    thuộc vào điều đó, và số của chúng đã được công bố.
     """
-    cycle = 4 * TIERS[tier]
+    cycle = 4 * TIERS[tier] if cycle_seconds is None else int(cycle_seconds)
     grid = np.arange(0, cycle, bar_seconds, dtype="int64")
     ok = (grid >= OFFSET_EXCLUDE) & (grid <= cycle - OFFSET_EXCLUDE)
     candidates = grid[ok]

@@ -9,11 +9,13 @@ với `quarter_stats.STATS`.
 """
 from __future__ import annotations
 
+from functools import partial
+
 import numpy as np
 import pandas as pd
 
 from .bars import Bars
-from .h4_grid import N_SLOTS, H4Labels
+from .h4_grid import DAY_SECONDS, N_SLOTS, H4Labels, aggregate_days, label_h4
 
 H_MAX_MIN = 1440
 HORIZONS_MIN = (60, 120, 240, 480, 720, 1200, 1440)
@@ -385,3 +387,58 @@ def killed_range_usd_by_year(rows: pd.DataFrame) -> pd.DataFrame:
     return _by_year(rows, [
         ("range_usd", lambda r: r["k_up"] & r["k_dn"], "range_usd"),
     ])
+
+
+def build_stats(bar_seconds: int) -> dict:
+    """Bảng đại lượng cho một khung thời gian.
+
+    `horizon` và `standardized` cần `bar_seconds`; bind sẵn ở đây để bộ chạy
+    null gọi mọi stat với đúng một tham số — cùng giao ước với
+    `quarter_stats.STATS`, nên hai nghiên cứu đọc được cạnh nhau.
+
+    Trả về dict MỚI mỗi lần gọi: default khả biến là footgun, một caller mutate
+    nó sẽ đọc sang mọi caller khác (bài học đã ghi trong `quarter_stats.run_grid`).
+    """
+    return {
+        "window": stat_kill_rate_window,
+        "horizon": partial(stat_kill_rate_horizon, bar_seconds=bar_seconds),
+        "standardized": partial(stat_kill_rate_standardized, bar_seconds=bar_seconds),
+        "order": stat_kill_order,
+        "excursion_atr": stat_excursion_atr,
+        "killed_range_atr": stat_killed_range_atr,
+        "context": stat_context,
+    }
+
+
+def run_grid(bars: Bars, bar_seconds: int, anchor_offset: int = 0,
+             stats: dict | None = None, **agg_kw) -> tuple[dict, pd.DataFrame]:
+    """Chạy một bộ đại lượng trên một lưới. Khoá dạng "<stat>.<đại lượng>".
+
+    Trả cả bảng dòng vì đường thật cần nó cho `rows.csv` và cho hai bảng theo
+    năm; đường null bỏ nó đi.
+
+    `agg_kw` đi thẳng vào `aggregate_days`, nên luật loại là CÙNG MỘT hàm với
+    cùng tham số ở cả hai đường — chỉ áp một bên thì cỡ mẫu lệch và phép so vô
+    nghĩa (spec §3.3.3).
+    """
+    labels = label_h4(bars.time, anchor_offset)
+    days = aggregate_days(bars, labels, bar_seconds, **agg_kw)
+    rows = scan_kills(bars, labels, days, bar_seconds)
+    table = build_stats(bar_seconds) if stats is None else stats
+    out: dict[str, float] = {}
+    for name, fn in table.items():
+        for key, value in fn(rows).items():
+            out[f"{name}.{key}"] = value
+    return out, rows
+
+
+def run_null(bars: Bars, bar_seconds: int, offsets: np.ndarray,
+             stats: dict | None = None, **agg_kw) -> pd.DataFrame:
+    """Một dòng mỗi lưới null. Offset sinh bằng
+    `quarter_stats.make_offsets(..., cycle_seconds=DAY_SECONDS)`."""
+    recs = []
+    for off in np.asarray(offsets, dtype="int64"):
+        rec: dict[str, float] = {"anchor_offset": int(off)}
+        rec.update(run_grid(bars, bar_seconds, int(off), stats, **agg_kw)[0])
+        recs.append(rec)
+    return pd.DataFrame(recs)

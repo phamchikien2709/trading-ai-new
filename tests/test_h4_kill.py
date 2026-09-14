@@ -1,14 +1,17 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from conftest import epoch_for_ny
 from rsi_fvg.bars import Bars
-from rsi_fvg.h4_grid import N_SLOTS, aggregate_days, label_h4
-from rsi_fvg.h4_kill import (COLUMNS, DTYPES, excursion_usd_by_year,
-                             killed_range_usd_by_year, scan_kills, stat_context,
+from rsi_fvg.h4_grid import DAY_SECONDS, N_SLOTS, aggregate_days, label_h4
+from rsi_fvg.h4_kill import (COLUMNS, DTYPES, build_stats,
+                             excursion_usd_by_year, killed_range_usd_by_year,
+                             run_grid, run_null, scan_kills, stat_context,
                              stat_excursion_atr, stat_kill_order,
                              stat_kill_rate_horizon, stat_kill_rate_standardized,
                              stat_kill_rate_window, stat_killed_range_atr)
+from rsi_fvg.quarter_stats import make_offsets, percentile_of
 
 NY_HOURS = (18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4,
             5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
@@ -539,3 +542,48 @@ def test_killed_range_atr_drops_rows_whose_rel_range_is_nan():
     got = stat_killed_range_atr(rows)
     assert got["killed_rel_range_s0_n"] == 1.0
     assert got["killed_rel_range_s0_max"] == 0.5
+
+
+def test_run_grid_returns_prefixed_keys_and_rows():
+    bars = build([(f"2026-01-{d:02d}", CALM) for d in range(5, 25)])
+    flat, rows = run_grid(bars, 3600, atr_period=2)
+    assert len(rows) > 100
+    assert "window.both_s0" in flat and "standardized.std_s5" in flat
+    assert "horizon.both_s0_h240" in flat and "context.range_usd_s0" in flat
+    assert "order.same_bar_s0" in flat and "excursion_atr.exc_up_atr_s0_p90" in flat
+    assert "killed_range_atr.killed_rel_range_s0_max" in flat
+    assert all("." in k for k in flat)
+
+
+def test_run_grid_shifted_grid_gives_different_labels():
+    """anchor_offset khác 0 phải cho một lưới khác — nếu không thì null vô nghĩa."""
+    bars = build([(f"2026-01-{d:02d}", CALM) for d in range(5, 25)])
+    a, _ = run_grid(bars, 3600, anchor_offset=0, atr_period=2)
+    b, _ = run_grid(bars, 3600, anchor_offset=2 * 3600, atr_period=2)
+    assert a["context.range_usd_s0"] != b["context.range_usd_s0"] or \
+           a["window.n_s0"] != b["window.n_s0"]
+
+
+def test_run_null_one_row_per_offset():
+    bars = build([(f"2026-01-{d:02d}", CALM) for d in range(5, 25)])
+    offs = make_offsets("", 3600, 4, 1, cycle_seconds=DAY_SECONDS)
+    nulls = run_null(bars, 3600, offs, atr_period=2)
+    assert len(nulls) == len(offs)
+    assert list(nulls["anchor_offset"]) == [int(x) for x in offs]
+    assert "standardized.std_s0" in nulls.columns
+
+
+def test_percentile_of_reused_from_quarter_stats():
+    """Không viết lại percentile — dùng đúng hàm mà hai study cũ dùng."""
+    assert percentile_of(0.5, np.array([0.1, 0.2, 0.9])) == pytest.approx(200 / 3)
+    assert np.isnan(percentile_of(float("nan"), np.array([0.1])))
+
+
+def test_build_stats_binds_bar_seconds():
+    """horizon và standardized cần bar_seconds; chúng được bind sẵn để bộ chạy
+    null gọi mọi stat với đúng một tham số (cùng giao ước quarter_stats.STATS)."""
+    table = build_stats(3600)
+    rows = mk_rows([{"slot": 0, "t_up": 1.0, "t_dn": 1.0, "h_avail": 10_000}])
+    for name, fn in table.items():
+        got = fn(rows)
+        assert isinstance(got, dict) and got, name
