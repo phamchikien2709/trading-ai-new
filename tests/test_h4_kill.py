@@ -5,12 +5,13 @@ import pytest
 from conftest import epoch_for_ny
 from rsi_fvg.bars import Bars
 from rsi_fvg.h4_grid import DAY_SECONDS, N_SLOTS, aggregate_days, label_h4
-from rsi_fvg.h4_kill import (COLUMNS, DTYPES, build_stats,
-                             excursion_usd_by_year, killed_range_usd_by_year,
-                             run_grid, run_null, scan_kills, stat_context,
-                             stat_excursion_atr, stat_kill_order,
-                             stat_kill_rate_horizon, stat_kill_rate_standardized,
-                             stat_kill_rate_window, stat_killed_range_atr)
+from rsi_fvg.h4_kill import (COLUMNS, DTYPES, MIN_CELL_N, build_stats,
+                             decile_cell_table, excursion_usd_by_year,
+                             killed_range_usd_by_year, run_grid, run_null,
+                             scan_kills, stat_context, stat_excursion_atr,
+                             stat_kill_order, stat_kill_rate_horizon,
+                             stat_kill_rate_standardized, stat_kill_rate_window,
+                             stat_killed_range_atr, verdict)
 from rsi_fvg.quarter_stats import make_offsets, percentile_of
 
 NY_HOURS = (18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4,
@@ -647,3 +648,133 @@ def test_build_stats_returns_a_fresh_dict_each_call():
     assert build_stats(3600) is not build_stats(3600)
     assert build_stats(60)["horizon"].keywords == {"bar_seconds": 60}
     assert build_stats(3600)["horizon"].keywords == {"bar_seconds": 3600}
+
+
+# --------------------------------------------------------------------------
+# Bảng (slot × decile) — spec §4.3 ③ bước 2
+# --------------------------------------------------------------------------
+
+def test_decile_cell_table_agrees_with_min_cell_n():
+    """Bảng 60 ô của báo cáo và khoá `min_cell_n_s{k}` mà cổng §10 đọc phải là
+    CÙNG một phép chia decile.
+
+    Nếu báo cáo tự chia decile lần thứ hai (cùng tham số, khác đường code) thì
+    hai thứ trôi lệch nhau âm thầm: người đọc thấy một bảng ô dày trong khi cổng
+    đọc một ô mỏng, hoặc ngược lại. Test này buộc hai bên khớp trên cùng dữ
+    liệu — dùng lại đúng bảng của `test_min_cell_n_reports_the_thinnest_decile`
+    (slot 0 mỏng nhất 1, slot 1 mỏng nhất 51)."""
+    recs = [{"slot": 0, "rel_range": 1.0, "h_avail": 10_000,
+             "t_up": 1.0, "t_dn": 1.0}] * 49
+    recs += [{"slot": 0, "rel_range": 5.0, "h_avail": 10_000,
+              "t_up": np.nan, "t_dn": np.nan}]
+    recs += [{"slot": 1, "rel_range": 1.0, "h_avail": 10_000,
+              "t_up": 1.0, "t_dn": 1.0}] * 51
+    recs += [{"slot": 1, "rel_range": 5.0, "h_avail": 10_000,
+              "t_up": 1.0, "t_dn": 1.0}] * 99
+    rows = mk_rows(recs)
+    table = decile_cell_table(rows, bar_seconds=60, horizon_min=720, n_deciles=2)
+    stat = stat_kill_rate_standardized(rows, bar_seconds=60, horizon_min=720,
+                                       n_deciles=2)
+
+    assert list(table.index) == list(range(N_SLOTS))       # cả sáu slot, kể cả slot rỗng
+    assert table.loc[0].tolist() == [49, 1]
+    assert table.loc[1].tolist() == [51, 99]
+    assert table.loc[2].tolist() == [0, 0]
+    for s in (0, 1):
+        used = table.loc[s][table.loc[s] > 0]
+        assert float(used.min()) == stat[f"min_cell_n_s{s}"]
+        assert float(len(used)) == stat[f"deciles_used_s{s}"]
+
+
+def test_decile_cell_table_empty_rows_does_not_raise():
+    """Đường null chạy 200 lưới lệch mốc neo; một offset bệnh lý xoá hết ngày.
+    Bảng phải trả về frame rỗng đọc được, không ném."""
+    table = decile_cell_table(mk_rows([]), bar_seconds=60)
+    assert table.empty
+
+
+# --------------------------------------------------------------------------
+# Phán quyết §10 — hai cổng
+# --------------------------------------------------------------------------
+
+def _stats_frame(pcts):
+    return pd.DataFrame([{"quantity": f"standardized.std_s{s}", "real": 0.0,
+                          "real_percentile": p, "n_nulls": 100}
+                         for s, p in pcts.items()])
+
+
+def _real(std, min_cell=500.0):
+    """`real` như `run_grid` trả ra: có CẢ std lẫn min_cell_n, vì cổng (a) đọc
+    cả hai."""
+    out = {f"standardized.std_s{s}": v for s, v in std.items()}
+    out.update({f"standardized.min_cell_n_s{s}": min_cell for s in std})
+    return out
+
+
+def test_verdict_needs_both_gates():
+    real = _real({0: 0.70, 1: 0.40, 2: 0.42, 3: 0.41, 4: 0.39, 5: 0.38})
+    ok, text = verdict(real, _stats_frame({0: 99.0, 5: 10.0}))
+    assert ok and "slot 0" in text and "DUOC phep" in text
+
+    # cao hơn nhưng percentile thấp -> cổng (b) chặn
+    ok, text = verdict(real, _stats_frame({0: 50.0, 5: 10.0}))
+    assert not ok and "KHONG duoc phep" in text
+
+    # percentile cao nhưng KHÔNG cao hơn slot đối chứng -> cổng (a) chặn
+    real2 = dict(real, **{"standardized.std_s0": 0.30})
+    ok, text = verdict(real2, _stats_frame({0: 99.0, 5: 10.0}))
+    assert not ok
+
+
+def test_verdict_only_looks_at_slots_0_and_5():
+    """Slot 2 vượt cả hai cổng cũng không mở gì: nghiên cứu hỏi về hai cây của
+    người dùng, và cho slot khác mở cổng là đổi câu hỏi sau khi thấy số."""
+    real = _real({0: 0.30, 1: 0.40, 2: 0.90, 3: 0.41, 4: 0.39, 5: 0.31})
+    ok, _ = verdict(real, _stats_frame({0: 10.0, 2: 99.0, 5: 10.0}))
+    assert not ok
+
+
+def test_verdict_text_names_the_missing_third_gate():
+    """Spec §5.3 và §10: Null B đã bị loại khỏi phạm vi, và điều đó phải xuất
+    hiện trong phán quyết chứ không nhét vào cuối báo cáo."""
+    _, text = verdict(_real({s: 0.4 for s in range(6)}),
+                      _stats_frame({0: 10.0, 5: 10.0}))
+    assert "Null B" in text
+
+
+def test_verdict_gate_a_reads_min_cell_n():
+    """Cổng (a) phải đọc `min_cell_n_s{k}` — đó là lý do khoá ấy tồn tại.
+
+    Một slot chuẩn hoá trên 10/10 decile trong đó MỘT ô chỉ có 1 quan sát vẫn
+    được gán trọng số gộp đầy đủ cho ô đó: tỉ lệ kill của nó là 0 hoặc 1 và
+    kéo con số chuẩn hoá đi hàng chục điểm phần trăm. Mở cổng Phase 2 trên một
+    con số như thế là mở cổng trên một quan sát duy nhất."""
+    std = {0: 0.70, 1: 0.40, 2: 0.42, 3: 0.41, 4: 0.39, 5: 0.38}
+    dense = verdict(_real(std, min_cell=500.0), _stats_frame({0: 99.0, 5: 10.0}))
+    assert dense[0]
+
+    thin = dict(_real(std, min_cell=500.0),
+                **{"standardized.min_cell_n_s0": float(MIN_CELL_N - 1)})
+    ok, text = verdict(thin, _stats_frame({0: 99.0, 5: 10.0}))
+    assert not ok
+    assert "min_cell_n" in text and str(MIN_CELL_N) in text
+
+
+def test_verdict_blocks_when_min_cell_n_is_missing_entirely():
+    """Không đo được độ thưa thì KHÔNG mở cổng. Mặc định phải là chặn: một
+    caller quên truyền khoá sẽ nhận "không đặc biệt", không nhận một phán quyết
+    mở cổng dựa trên thứ chưa ai kiểm."""
+    real = {f"standardized.std_s{s}": v for s, v in
+            {0: 0.70, 1: 0.40, 2: 0.42, 3: 0.41, 4: 0.39, 5: 0.38}.items()}
+    ok, _ = verdict(real, _stats_frame({0: 99.0, 5: 10.0}))
+    assert not ok
+
+
+def test_verdict_reports_every_target_slot_even_when_it_fails():
+    """Báo cáo phải cho thấy CẢ HAI slot được hỏi cùng số của chúng, không chỉ
+    slot thắng: "slot 5 không đạt" là một kết quả, và giấu nó đi thì lần đọc
+    sau không phân biệt được với "slot 5 chưa được đo"."""
+    real = _real({0: 0.70, 1: 0.40, 2: 0.42, 3: 0.41, 4: 0.39, 5: 0.38})
+    _, text = verdict(real, _stats_frame({0: 99.0, 5: 10.0}))
+    assert "slot 0" in text and "slot 5" in text
+    assert "0.7000" in text and "0.3800" in text

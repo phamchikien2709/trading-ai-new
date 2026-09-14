@@ -214,6 +214,55 @@ def stat_kill_rate_horizon(rows: pd.DataFrame, bar_seconds: int,
     return out
 
 
+def _std_prep(rows: pd.DataFrame, bar_seconds: int, horizon_min: int,
+              n_deciles: int) -> pd.DataFrame | None:
+    """Phần chung của ③: lọc theo horizon, gắn cờ `killed`, chia decile GỘP.
+
+    Tồn tại như một hàm riêng vì HAI phía đọc cùng phép chia decile này: khoá
+    `min_cell_n_s{k}` mà cổng §10 đọc, và bảng 60 ô mà `summary.md` in. Chia
+    decile hai lần bằng hai đường code (dù cùng tham số) là cách để bảng và cổng
+    trôi lệch nhau âm thầm — người đọc thấy ô dày trong khi cổng đọc ô mỏng.
+
+    Trả `None` khi không còn dòng nào dùng được, để hai caller tự quyết định ca
+    suy biến của mình.
+    """
+    if rows.empty:
+        return None
+    hb = horizon_min * 60 // bar_seconds
+    r = rows[(rows["h_avail"] >= hb) & np.isfinite(rows["rel_range"])].copy()
+    if r.empty:
+        return None
+    r["killed"] = ((r["t_up"].to_numpy(dtype="float64") <= hb)
+                   & (r["t_dn"].to_numpy(dtype="float64") <= hb))
+    r["dec"] = pd.qcut(r["rel_range"], n_deciles, labels=False, duplicates="drop")
+    return r
+
+
+def decile_cell_table(rows: pd.DataFrame, bar_seconds: int,
+                      horizon_min: int = STD_HORIZON_MIN,
+                      n_deciles: int = 10) -> pd.DataFrame:
+    """Bảng (slot × decile) với `n` từng ô — spec §4.3 ③ bước 2: "để ô thưa lộ ra".
+
+    Thuộc về BÁO CÁO, không thuộc `dict[str, float]` của bộ chạy null (60 ô ×
+    200 lưới null là nhiễu, không phải thông tin). Nhưng nó không phải trang trí:
+    `deciles_used_s{k} == 10` đọc như "chuẩn hoá đầy đủ" trong khi một ô trong
+    mười có thể chỉ có một quan sát và vẫn mang trọng số gộp đầy đủ. Bảng này là
+    thứ duy nhất cho người đọc thấy điều đó ở mọi ô, chứ không chỉ ô nhỏ nhất.
+
+    Một dòng mỗi slot — CẢ SÁU, kể cả slot không có quan sát nào, vì "slot vắng
+    mặt" là một kết quả và một bảng chỉ có bốn dòng đọc ra như thể chỉ có bốn
+    slot tồn tại. Ô trống là 0, không phải NaN: đếm được thì không có NaN.
+    """
+    r = _std_prep(rows, bar_seconds, horizon_min, n_deciles)
+    if r is None:
+        return pd.DataFrame()
+    cells = (r.groupby(["slot", "dec"]).size().unstack("dec", fill_value=0)
+             .reindex(index=range(N_SLOTS), fill_value=0))
+    cells.columns = [f"dec{int(c)}" for c in cells.columns]
+    cells.index.name = "slot"
+    return cells.astype("int64")
+
+
 def stat_kill_rate_standardized(rows: pd.DataFrame, bar_seconds: int,
                                 horizon_min: int = STD_HORIZON_MIN,
                                 n_deciles: int = 10) -> dict[str, float]:
@@ -243,26 +292,15 @@ def stat_kill_rate_standardized(rows: pd.DataFrame, bar_seconds: int,
     Tính tại horizon CHUNG (mặc định 720 phút), không tại cửa sổ ①, vì ① có độ
     dài khác nhau giữa các slot nên không so được (spec §4.2).
     """
-    hb = horizon_min * 60 // bar_seconds
     out: dict[str, float] = {}
-    if rows.empty:
+    r = _std_prep(rows, bar_seconds, horizon_min, n_deciles)
+    if r is None:
         for s in range(N_SLOTS):
             out[f"std_s{s}"] = out[f"raw_s{s}"] = float("nan")
             out[f"deciles_used_s{s}"] = out[f"n_s{s}"] = 0.0
             out[f"min_cell_n_s{s}"] = 0.0
         return out
 
-    r = rows[(rows["h_avail"] >= hb) & np.isfinite(rows["rel_range"])].copy()
-    if r.empty:
-        for s in range(N_SLOTS):
-            out[f"std_s{s}"] = out[f"raw_s{s}"] = float("nan")
-            out[f"deciles_used_s{s}"] = out[f"n_s{s}"] = 0.0
-            out[f"min_cell_n_s{s}"] = 0.0
-        return out
-
-    r["killed"] = ((r["t_up"].to_numpy(dtype="float64") <= hb)
-                   & (r["t_dn"].to_numpy(dtype="float64") <= hb))
-    r["dec"] = pd.qcut(r["rel_range"], n_deciles, labels=False, duplicates="drop")
     weights = r["dec"].value_counts(normalize=True)      # phân phối GỘP
 
     for s in range(N_SLOTS):
@@ -442,3 +480,115 @@ def run_null(bars: Bars, bar_seconds: int, offsets: np.ndarray,
         rec.update(run_grid(bars, bar_seconds, int(off), stats, **agg_kw)[0])
         recs.append(rec)
     return pd.DataFrame(recs)
+
+
+# --------------------------------------------------------------------------
+# Luật kết luận §10
+#
+# Nằm ở ĐÂY chứ không trong `scripts/study_h4_kill.py` vì đây là cổng kết luận
+# của cả nghiên cứu, nên nó phải có test gọi hàm trực tiếp — mà mọi test script
+# của repo chạy bằng `subprocess` và không gọi được hàm bên trong script. Script
+# import bốn hằng số này và `verdict`; nó không định nghĩa lại cái nào.
+# --------------------------------------------------------------------------
+
+# Hai slot mà người dùng hỏi, và bốn slot đối chứng.
+TARGET_SLOTS = (0, 5)
+CONTROL_SLOTS = (1, 2, 3, 4)
+VERDICT_PERCENTILE = 95.0
+SLOT_NY = {0: "17:00-21:00 NY", 1: "21:00-01:00", 2: "01:00-05:00",
+           3: "05:00-09:00", 4: "09:00-13:00", 5: "13:00-17:00 NY"}
+
+VERDICT_KEY = "standardized.std_s{s}"
+MIN_CELL_KEY = "standardized.min_cell_n_s{s}"
+
+# Ô (slot × decile) mỏng hơn ngần này thì con số chuẩn hoá của slot đó không
+# được dùng để mở cổng Phase 2. Lý do bằng số: mỗi ô mang trọng số gộp ~10%, và
+# tỉ lệ kill ước lượng trên n quan sát có sai số chuẩn <= 0,5/sqrt(n). Với n=10
+# đó là <= 16 điểm phần trăm × 10% = 1,6 điểm phần trăm đóng góp vào con số
+# chuẩn hoá — đã cùng cỡ với khoảng cách giữa các slot mà cổng (a) đang so. Dưới
+# đó thì một ô đơn lẻ tự quyết định phán quyết. Trên dữ liệu thật mỗi ô có ~230
+# quan sát, nên ngưỡng này không cắt vào ca bình thường; nó chỉ chặn ca suy biến.
+MIN_CELL_N = 10
+
+
+def verdict(real: dict, stats: pd.DataFrame) -> tuple[bool, str]:
+    """Luật §10, tính bằng máy — không để người đọc tự kết luận.
+
+    HAI cổng, không phải ba: cổng Null B đã bị người dùng loại khỏi phạm vi
+    (spec §5.3), và hệ quả của việc thiếu nó được in ngay trong phán quyết chứ
+    không nhét vào cuối báo cáo.
+
+    Chỉ xét slot 0 và slot 5. Một slot đối chứng vượt cả hai cổng cũng không mở
+    gì: nghiên cứu hỏi về hai cây của người dùng, và để slot khác mở cổng là đổi
+    câu hỏi sau khi đã thấy số.
+
+    Cổng (a) đọc CẢ `min_cell_n_s{k}` (spec §4.3 ③ bước 2): một slot chuẩn hoá
+    trên 10/10 decile trong đó một ô chỉ có một quan sát vẫn gán trọng số gộp
+    đầy đủ cho ô đó, nên con số chuẩn hoá của nó có thể do một dòng duy nhất
+    quyết định. Thiếu hẳn khoá đó thì cổng ĐÓNG: không đo được độ thưa nghĩa là
+    chưa ai kiểm, và mặc định của một cổng chưa kiểm phải là chặn.
+
+    Ngưỡng chỉ áp cho slot ĐƯỢC HỎI, không cho slot đối chứng: cổng (a) lấy MAX
+    của bốn đối chứng, nên một đối chứng thưa mà lệch cao chỉ làm cổng khó qua
+    hơn (bảo thủ), còn lệch thấp thì gần như chắc chắn không phải cái đang giữ
+    max. `min_cell_n` của đối chứng vẫn được in ra để người đọc tự thấy.
+    """
+    pct = dict(zip(stats["quantity"], stats["real_percentile"]))
+
+    def _get(fmt: str, s: int) -> float:
+        return float(real.get(fmt.format(s=s), float("nan")))
+
+    control = [_get(VERDICT_KEY, s) for s in CONTROL_SLOTS]
+    finite = [(s, v) for s, v in zip(CONTROL_SLOTS, control) if np.isfinite(v)]
+    if finite:
+        top_slot, best_control = max(finite, key=lambda kv: kv[1])
+        top_txt = (f"{best_control:.4f} (slot {top_slot}, "
+                   f"min_cell_n={_get(MIN_CELL_KEY, top_slot):.0f})")
+    else:
+        best_control, top_txt = float("nan"), "nan (khong slot doi chung nao do duoc)"
+
+    lines = ["## Phan quyet section 10", "",
+             f"- nguong percentile: {VERDICT_PERCENTILE}"
+             f"  - horizon chuan hoa: {STD_HORIZON_MIN} phut"
+             f"  - nguong o thua min_cell_n: {MIN_CELL_N}",
+             f"- slot doi chung cao nhat (std): {top_txt}", ""]
+    passed = False
+    for s in TARGET_SLOTS:
+        std = _get(VERDICT_KEY, s)
+        cell = _get(MIN_CELL_KEY, s)
+        p = float(pct.get(VERDICT_KEY.format(s=s), float("nan")))
+        dense = bool(np.isfinite(cell) and cell >= MIN_CELL_N)
+        gate_a = bool(np.isfinite(std) and np.isfinite(best_control)
+                      and std > best_control and dense)
+        gate_b = bool(np.isfinite(p) and p > VERDICT_PERCENTILE)
+        hit = gate_a and gate_b
+        passed = passed or hit
+        lines.append(
+            f"- **slot {s}** ({SLOT_NY[s]}): std={std:.4f}, percentile={p:.1f}, "
+            f"min_cell_n={cell:.0f} (nguong {MIN_CELL_N})"
+            f" -> cong (a) cao hon doi chung VA o du day: "
+            f"{'DAT' if gate_a else 'khong'}"
+            f"{'' if dense else ' [chan vi o thua]'}; "
+            f"cong (b) vuot null: {'DAT' if gate_b else 'khong'} "
+            f"-> {'DAC BIET' if hit else 'khong dac biet'}")
+
+    lines += ["", (
+        "**Phase 2 DUOC phep viet spec.** Slot 0 hoac slot 5 dat ca hai cong."
+        if passed else
+        "**Phase 2 KHONG duoc phep viet spec.** Khong slot nao trong hai slot "
+        "duoc hoi dat ca hai cong. Hien tuong giai thich duoc bang do rong cay "
+        "cong do dai cua so."
+    ), "", (
+        "**Cong thu ba khong ton tai: Null B da bi loai khoi pham vi (spec 5.3).** "
+        "Ke ca khi hai cong DAT, ket luan dung la 'luoi 17:00 NY khac luoi bat ky, "
+        "sau khi kiem soat do rong', KHONG phai 'moc H4 phien A bi nham'. Cau sau "
+        "can Null B (dao ghep duong gia ngay gan nhau), va spec Phase 2 neu duoc "
+        "viet phai mo dau bang viec chay Null B."
+    ), "", (
+        "Luu y da ghi trong spec section 10: luat nay chay 2 slot x 2 cong o muc "
+        "95% nen sai so toan ho rong hon 5%. Nguong de nay duoc chon co y thuc va "
+        "khong duoc siet hay noi sau khi thay so. Rieng dai luong 1 (ti le kill "
+        "tho) KHONG BAO GIO la can cu ket luan: spec 4.2 cho thay no khong so "
+        "duoc giua cac slot."
+    )]
+    return passed, "\n".join(lines)
