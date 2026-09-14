@@ -5,7 +5,8 @@ import pytest
 from conftest import epoch_for_ny
 from rsi_fvg.bars import Bars
 from rsi_fvg.h4_grid import DAY_SECONDS, N_SLOTS, aggregate_days, label_h4
-from rsi_fvg.h4_kill import (COLUMNS, DTYPES, MIN_CELL_N, build_stats,
+from rsi_fvg.h4_kill import (COLUMNS, CONTROL_SLOTS, DTYPES, MIN_CELL_N,
+                             TARGET_SLOTS, VERDICT_PERCENTILE, build_stats,
                              decile_cell_table, excursion_usd_by_year,
                              killed_range_usd_by_year, run_grid, run_null,
                              scan_kills, stat_context, stat_excursion_atr,
@@ -728,10 +729,20 @@ def test_verdict_needs_both_gates():
 
 def test_verdict_only_looks_at_slots_0_and_5():
     """Slot 2 vượt cả hai cổng cũng không mở gì: nghiên cứu hỏi về hai cây của
-    người dùng, và cho slot khác mở cổng là đổi câu hỏi sau khi thấy số."""
+    người dùng, và cho slot khác mở cổng là đổi câu hỏi sau khi thấy số.
+
+    Bản đầu của test này chỉ assert `not ok` — và nó xanh VÌ LÝ DO SAI: slot 2
+    nằm trong `CONTROL_SLOTS` nên nó tự so với chính mình (`0.90 > 0.90` là
+    False), tức thêm slot 2 vào `TARGET_SLOTS` cũng không làm test đỏ. Ghim
+    thẳng vào danh sách được xét thay vì vào kết quả.
+    """
     real = _real({0: 0.30, 1: 0.40, 2: 0.90, 3: 0.41, 4: 0.39, 5: 0.31})
-    ok, _ = verdict(real, _stats_frame({0: 10.0, 2: 99.0, 5: 10.0}))
+    ok, text = verdict(real, _stats_frame({0: 10.0, 2: 99.0, 5: 10.0}))
     assert not ok
+    assert TARGET_SLOTS == (0, 5)
+    assert set(TARGET_SLOTS) & set(CONTROL_SLOTS) == set()
+    assert "**slot 0**" in text and "**slot 5**" in text
+    assert "**slot 2**" not in text
 
 
 def test_verdict_text_names_the_missing_third_gate():
@@ -793,3 +804,66 @@ def test_verdict_reports_every_target_slot_even_when_it_fails():
     _, text = verdict(real, _stats_frame({0: 99.0, 5: 10.0}))
     assert "slot 0" in text and "slot 5" in text
     assert "0.7000" in text and "0.3800" in text
+
+
+def test_verdict_compares_against_the_highest_of_all_four_controls():
+    """Cổng (a) của §10 là "cao hơn **cả bốn** slot đối chứng". Cả `CONTROL_SLOTS`
+    lẫn phép `max` đều không có gì ghim: bốn đột biến (bỏ bớt slot khỏi danh
+    sách đối chứng, và `max` -> `min`) sống sót cả suite.
+
+    Kịch bản hỏng đo được trên dữ liệu THẬT: đặt `CONTROL_SLOTS = (4,)` — slot
+    đối chứng yếu nhất, std 0.1487 — thì slot 0 (std 0.3708) vượt cổng (a) và
+    phán quyết lật thành "Phase 2 DUOC phep". Đó đúng là chiều mà §10 lập ra để
+    chặn: không được nới sau khi đã thấy số.
+
+    Test cũ dùng bốn đối chứng 0.40/0.42/0.41/0.39 — cụm quá sát nên `max` và
+    `min` rơi cùng phía của assertion. Ở đây chúng trải rộng.
+    """
+    # slot 0 cao hơn ba đối chứng nhưng THUA đối chứng thứ tư -> phải chặn
+    real = _real({0: 0.50, 1: 0.10, 2: 0.15, 3: 0.20, 4: 0.60, 5: 0.10})
+    ok, text = verdict(real, _stats_frame({0: 99.0, 5: 10.0}))
+    assert not ok
+    assert "slot 4" in text          # đối chứng đang giữ max phải được nêu tên
+
+    # và MỌI slot đối chứng đều phải được xét: lần lượt cho từng slot giữ max.
+    # Lặp qua HẰNG SỐ VIẾT THẲNG, không qua `CONTROL_SLOTS` — lặp qua chính nó
+    # thì một đột biến rút ngắn danh sách chỉ bị kiểm trên phần nó còn giữ, và
+    # test tự vô hiệu. (`CONTROL_SLOTS = (1,3,4)` và `(4,)` sống sót đúng vì
+    # cách viết đó.)
+    assert CONTROL_SLOTS == (1, 2, 3, 4)
+    for s in (1, 2, 3, 4):
+        std = {0: 0.50, 1: 0.10, 2: 0.15, 3: 0.20, 4: 0.25, 5: 0.10}
+        std[s] = 0.60
+        assert not verdict(_real(std), _stats_frame({0: 99.0, 5: 10.0}))[0], s
+
+
+def test_verdict_percentile_threshold_is_pinned_at_its_registered_value():
+    """95.0 là ngưỡng ĐĂNG KÝ TRƯỚC của §10, không phải tham số điều chỉnh
+    được. Không có gì ghim nó: hạ xuống 50 hay 60 thì cả suite vẫn xanh, và
+    một slot chỉ cần cao hơn 61% lưới null — tức gần trung vị — là mở cổng
+    Phase 2.
+
+    Biên cũng phải chặt: §10 nói "**vượt** percentile 95", và với 200 lưới null
+    thì percentile đúng bằng 95.0 là trạng thái đạt được (190/200), nên `>=` sẽ
+    là một cổng khác hẳn.
+    """
+    assert VERDICT_PERCENTILE == 95.0
+    real = _real({0: 0.70, 1: 0.40, 2: 0.42, 3: 0.41, 4: 0.39, 5: 0.38})
+    assert not verdict(real, _stats_frame({0: 94.9, 5: 10.0}))[0]
+    assert not verdict(real, _stats_frame({0: 95.0, 5: 10.0}))[0]   # đúng bằng: KHÔNG vượt
+    assert verdict(real, _stats_frame({0: 95.1, 5: 10.0}))[0]
+
+
+def test_verdict_blocks_when_min_cell_n_is_zero_whatever_the_floor_is():
+    """`0.0` là chính giá trị `stat_kill_rate_standardized` trả về ở ca suy
+    biến — `rel_range` gộp là hằng số, `pd.qcut` trả NaN cho mọi dòng, không
+    decile nào dùng được. Một ô rỗng không bao giờ là bằng chứng.
+
+    Test cũ dùng `MIN_CELL_N - 1` nên nó tự tham chiếu và đúng với MỌI giá trị
+    hằng số, kể cả 0 — mà với `MIN_CELL_N = 0` thì `0 >= 0` qua cổng, tức mở
+    lại đúng ca mà sàn này sinh ra để chặn.
+    """
+    assert MIN_CELL_N >= 1
+    std = {0: 0.70, 1: 0.40, 2: 0.42, 3: 0.41, 4: 0.39, 5: 0.38}
+    thin = dict(_real(std), **{"standardized.min_cell_n_s0": 0.0})
+    assert not verdict(thin, _stats_frame({0: 99.0, 5: 10.0}))[0]

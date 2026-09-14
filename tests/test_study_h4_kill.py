@@ -88,7 +88,7 @@ def test_end_to_end_csv_writes_every_artifact(tmp_path):
     assert "PASS (UTC)" in p.stdout
     assert "bang diem" in p.stdout
 
-    for name in ("rows.csv", "stats.csv", "summary.md",
+    for name in ("rows.csv", "stats.csv", "summary.md", "decile_cells.csv",
                  "excursion_usd_by_year.csv", "killed_range_usd_by_year.csv"):
         assert (out / name).exists(), name
 
