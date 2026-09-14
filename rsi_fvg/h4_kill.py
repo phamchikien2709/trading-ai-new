@@ -298,3 +298,90 @@ def stat_context(rows: pd.DataFrame) -> dict[str, float]:
         out[f"day_atr_s{s}"] = _median_or_nan(r["day_atr"])
         out[f"n_s{s}"] = float(len(r))
     return out
+
+
+PCTS = (50, 75, 90, 95)
+
+
+def _pct_block(x, prefix: str, out: dict[str, float]) -> None:
+    """Phân vị + max + n cho một dãy. `max` là ĐÚNG MỘT điểm dữ liệu và báo cáo
+    phải nói vậy mỗi lần in nó (spec §4.4)."""
+    x = np.asarray(x, dtype="float64")
+    x = x[np.isfinite(x)]
+    for p in PCTS:
+        out[f"{prefix}_p{p}"] = float(np.percentile(x, p)) if x.size else float("nan")
+    out[f"{prefix}_max"] = float(x.max()) if x.size else float("nan")
+    out[f"{prefix}_n"] = float(x.size)
+
+
+def stat_kill_order(rows: pd.DataFrame) -> dict[str, float]:
+    """④ Trong nhóm bị kill cả hai đầu: đầu nào trước, hay cùng một bar.
+
+    Ô `same_bar` là phần KHÔNG xác định được ở độ phân giải đang dùng, và nó
+    được báo ra chứ không gán về một phía. Trên H1 ô này sẽ lớn tới mức ④ vô
+    dụng (spec §11 mục 3).
+    """
+    out: dict[str, float] = {}
+    for s in range(N_SLOTS):
+        r = rows[(rows["slot"] == s) & rows["k_up"] & rows["k_dn"]]
+        tu = r["t_up"].to_numpy(dtype="float64")
+        td = r["t_dn"].to_numpy(dtype="float64")
+        out[f"up_first_s{s}"] = _mean_or_nan(tu < td)
+        out[f"dn_first_s{s}"] = _mean_or_nan(td < tu)
+        out[f"same_bar_s{s}"] = _mean_or_nan(tu == td)
+        out[f"n_s{s}"] = float(len(r))
+    return out
+
+
+def stat_excursion_atr(rows: pd.DataFrame) -> dict[str, float]:
+    """⑤ "Max range kill" nghĩa thứ nhất: giá đi tiếp bao xa QUÁ mốc.
+
+    Chia `day_atr` nên không đơn vị và so được xuyên 9 năm — bắt buộc, vì range
+    median của vàng gấp 13 lần từ 2017 tới 2026 (spec §2.3b). Dạng USD tách theo
+    năm nằm ở `excursion_usd_by_year`, không vào null.
+    """
+    out: dict[str, float] = {}
+    for s in range(N_SLOTS):
+        r = rows[rows["slot"] == s]
+        up = r[r["k_up"]]
+        dn = r[r["k_dn"]]
+        _pct_block(up["exc_up"] / up["day_atr"], f"exc_up_atr_s{s}", out)
+        _pct_block(dn["exc_dn"] / dn["day_atr"], f"exc_dn_atr_s{s}", out)
+    return out
+
+
+def stat_killed_range_atr(rows: pd.DataFrame) -> dict[str, float]:
+    """⑥ "Max range kill" nghĩa thứ hai: range của cây bị quét CẢ HAI đầu."""
+    out: dict[str, float] = {}
+    for s in range(N_SLOTS):
+        r = rows[(rows["slot"] == s) & rows["k_up"] & rows["k_dn"]]
+        _pct_block(r["rel_range"], f"killed_rel_range_s{s}", out)
+    return out
+
+
+def _by_year(rows: pd.DataFrame, specs) -> pd.DataFrame:
+    """Bảng BÁO CÁO một dòng mỗi (năm, slot). Không vào null: dạng USD tách theo
+    năm sinh hàng nghìn khoá và không có ý nghĩa khi so với lưới lệch mốc neo,
+    vì lưới null cũng chạy trên cùng thị trường vàng."""
+    recs = []
+    if rows.empty:
+        return pd.DataFrame(recs)
+    for (y, s), r in rows.groupby(["year", "slot"], sort=True):
+        rec: dict[str, float] = {"year": int(y), "slot": int(s), "n_rows": float(len(r))}
+        for prefix, mask, col in specs:
+            _pct_block(r.loc[mask(r), col], prefix, rec)
+        recs.append(rec)
+    return pd.DataFrame(recs)
+
+
+def excursion_usd_by_year(rows: pd.DataFrame) -> pd.DataFrame:
+    return _by_year(rows, [
+        ("exc_up", lambda r: r["k_up"], "exc_up"),
+        ("exc_dn", lambda r: r["k_dn"], "exc_dn"),
+    ])
+
+
+def killed_range_usd_by_year(rows: pd.DataFrame) -> pd.DataFrame:
+    return _by_year(rows, [
+        ("range_usd", lambda r: r["k_up"] & r["k_dn"], "range_usd"),
+    ])

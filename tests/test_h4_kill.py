@@ -4,9 +4,11 @@ import pandas as pd
 from conftest import epoch_for_ny
 from rsi_fvg.bars import Bars
 from rsi_fvg.h4_grid import N_SLOTS, aggregate_days, label_h4
-from rsi_fvg.h4_kill import (COLUMNS, DTYPES, scan_kills, stat_context,
+from rsi_fvg.h4_kill import (COLUMNS, DTYPES, excursion_usd_by_year,
+                             killed_range_usd_by_year, scan_kills, stat_context,
+                             stat_excursion_atr, stat_kill_order,
                              stat_kill_rate_horizon, stat_kill_rate_standardized,
-                             stat_kill_rate_window)
+                             stat_kill_rate_window, stat_killed_range_atr)
 
 NY_HOURS = (18, 19, 20, 21, 22, 23, 0, 1, 2, 3, 4,
             5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16)
@@ -218,14 +220,21 @@ def test_empty_result_keeps_full_column_set():
 
 def mk_rows(recs):
     """Bảng dòng dựng tay. Mỗi rec chỉ cần các cột mà đại lượng đang test đọc;
-    phần còn lại điền mặc định vô hại."""
+    phần còn lại điền mặc định vô hại.
+
+    Dựng qua `columns=COLUMNS` + `.astype(DTYPES)` y như `scan_kills`, vì đây là
+    stand-in của `scan_kills` trong test: `pd.DataFrame([])` trần trụi (khi
+    `recs` rỗng) cho ra frame KHÔNG CỘT NÀO và mọi đại lượng đọc
+    `rows[rows["slot"] == s]` sẽ KeyError — tức helper sẽ báo lỗi giả ở đúng ca
+    rỗng mà `COLUMNS`/`DTYPES` được lập ra để chặn."""
     base = dict(day_num=0, date=pd.Timestamp("2026-01-05"), year=2026, slot=0,
                 cand_high=2010.0, cand_low=1990.0, range_usd=20.0, day_atr=10.0,
                 rel_range=2.0, w_from=1, w_to=20, w_bars=20, w_hours=20.0,
                 gap_days=1, crosses_weekend=False, h_avail=1440,
                 t_up=np.nan, t_dn=np.nan, k_up=False, k_dn=False,
                 exc_up=np.nan, exc_dn=np.nan)
-    return pd.DataFrame([{**base, **r} for r in recs])
+    return pd.DataFrame([{**base, **r} for r in recs],
+                        columns=list(COLUMNS)).astype(DTYPES)
 
 
 def test_window_rates_split_four_ways():
@@ -414,3 +423,70 @@ def test_min_cell_n_is_zero_not_nan_when_every_rel_range_is_identical():
         assert got[f"deciles_used_s{s}"] == 0.0
         assert got[f"min_cell_n_s{s}"] == 0.0
         assert isinstance(got[f"min_cell_n_s{s}"], float)
+
+
+def test_kill_order_reports_same_bar_as_its_own_bucket():
+    """Cùng một bar là phần KHÔNG XÁC ĐỊNH ĐƯỢC ở độ phân giải đang dùng. Nó
+    được báo ra chứ không gán về một phía — engine có quy ước 'SL thắng khi
+    trùng bar' nhưng đó là quy ước bảo thủ cho backtest, không phải sự thật."""
+    rows = mk_rows([
+        {"slot": 0, "k_up": True, "k_dn": True, "t_up": 3.0, "t_dn": 7.0},
+        {"slot": 0, "k_up": True, "k_dn": True, "t_up": 9.0, "t_dn": 2.0},
+        {"slot": 0, "k_up": True, "k_dn": True, "t_up": 5.0, "t_dn": 5.0},
+        {"slot": 0, "k_up": True, "k_dn": False, "t_up": 1.0},   # không vào ④
+    ])
+    got = stat_kill_order(rows)
+    assert got["n_s0"] == 3.0
+    assert abs(got["up_first_s0"] - 1 / 3) < 1e-12
+    assert abs(got["dn_first_s0"] - 1 / 3) < 1e-12
+    assert abs(got["same_bar_s0"] - 1 / 3) < 1e-12
+    assert abs(got["up_first_s0"] + got["dn_first_s0"] + got["same_bar_s0"] - 1.0) < 1e-12
+
+
+def test_excursion_atr_percentiles_only_over_killed_rows():
+    rows = mk_rows([
+        {"slot": 0, "k_up": True, "exc_up": 1.0, "day_atr": 10.0},
+        {"slot": 0, "k_up": True, "exc_up": 3.0, "day_atr": 10.0},
+        {"slot": 0, "k_up": False, "exc_up": np.nan, "day_atr": 10.0},
+        {"slot": 0, "k_dn": True, "exc_dn": 5.0, "day_atr": 10.0},
+    ])
+    got = stat_excursion_atr(rows)
+    assert got["exc_up_atr_s0_p50"] == 0.2          # (0.1 + 0.3) / 2
+    assert got["exc_up_atr_s0_max"] == 0.3
+    assert got["exc_up_atr_s0_n"] == 2.0
+    assert got["exc_dn_atr_s0_max"] == 0.5 and got["exc_dn_atr_s0_n"] == 1.0
+
+
+def test_killed_range_atr_only_both_ends():
+    """⑥ là nghĩa thứ hai của 'max range kill': range của cây bị quét CẢ HAI
+    đầu — 'range rộng tới đâu thì vẫn còn bị quét hai chiều'."""
+    rows = mk_rows([
+        {"slot": 0, "k_up": True, "k_dn": True, "rel_range": 0.4},
+        {"slot": 0, "k_up": True, "k_dn": True, "rel_range": 0.8},
+        {"slot": 0, "k_up": True, "k_dn": False, "rel_range": 9.0},
+    ])
+    got = stat_killed_range_atr(rows)
+    assert got["killed_rel_range_s0_max"] == 0.8    # 9.0 không vào: chỉ kill một đầu
+    assert got["killed_rel_range_s0_n"] == 2.0
+
+
+def test_by_year_tables_are_dataframes_split_by_year():
+    """Spec §2.3b: range median đi từ 2,56 USD (2017) lên 33,53 (2026), gấp 13
+    lần. Một phân vị USD gộp cả mẫu chỉ nói về 2025-2026, nên phải tách năm."""
+    rows = mk_rows([
+        {"slot": 0, "year": 2017, "k_up": True, "exc_up": 1.0, "k_dn": True,
+         "exc_dn": 1.0, "range_usd": 3.0},
+        {"slot": 0, "year": 2026, "k_up": True, "exc_up": 30.0, "k_dn": True,
+         "exc_dn": 30.0, "range_usd": 40.0},
+    ])
+    exc = excursion_usd_by_year(rows)
+    assert set(exc["year"]) == {2017, 2026}
+    assert float(exc[exc["year"] == 2017]["exc_up_max"].iloc[0]) == 1.0
+    assert float(exc[exc["year"] == 2026]["exc_up_max"].iloc[0]) == 30.0
+    rng = killed_range_usd_by_year(rows)
+    assert float(rng[rng["year"] == 2026]["range_usd_max"].iloc[0]) == 40.0
+
+
+def test_empty_percentile_block_gives_nan_and_zero_n():
+    got = stat_excursion_atr(mk_rows([]))
+    assert np.isnan(got["exc_up_atr_s0_p90"]) and got["exc_up_atr_s0_n"] == 0.0
