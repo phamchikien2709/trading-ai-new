@@ -770,6 +770,21 @@ def test_verdict_blocks_when_min_cell_n_is_missing_entirely():
     assert not ok
 
 
+def test_verdict_blocks_when_no_control_slot_is_measurable():
+    """Bốn slot đối chứng đều NaN (một lưới null bệnh lý xoá sạch chúng): không
+    có mốc để so thì cổng (a) KHÔNG được mở.
+
+    `np.nanmax` trên một dãy toàn NaN vừa cảnh báo vừa trả NaN, và `NaN > x` là
+    False — nên nhánh này "tình cờ" chặn đúng. Test tồn tại để việc chặn đúng là
+    do thiết kế chứ không do tình cờ: một lần dọn dẹp thay `nanmax` bằng `max`
+    với `initial=0.0` sẽ biến "không đo được gì" thành "cao hơn mọi đối chứng"."""
+    real = {"standardized.std_s0": 0.70, "standardized.min_cell_n_s0": 500.0,
+            "standardized.std_s5": 0.60, "standardized.min_cell_n_s5": 500.0}
+    ok, text = verdict(real, _stats_frame({0: 99.0, 5: 99.0}))
+    assert not ok
+    assert "khong slot doi chung nao do duoc" in text
+
+
 def test_verdict_reports_every_target_slot_even_when_it_fails():
     """Báo cáo phải cho thấy CẢ HAI slot được hỏi cùng số của chúng, không chỉ
     slot thắng: "slot 5 không đạt" là một kết quả, và giấu nó đi thì lần đọc
