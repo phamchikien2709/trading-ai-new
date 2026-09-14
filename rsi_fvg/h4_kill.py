@@ -278,7 +278,13 @@ def stat_kill_rate_standardized(rows: pd.DataFrame, bar_seconds: int,
         total = float(w.sum())
         out[f"std_s{s}"] = float((by_dec * w).sum() / total) if total > 0 else float("nan")
         out[f"deciles_used_s{s}"] = float(len(by_dec))
-        out[f"min_cell_n_s{s}"] = float(cell_n.min())
+        # cell_n rỗng khi `rel_range` gộp là hằng số: `pd.qcut(..., duplicates=
+        # "drop")` trả NaN cho MỌI dòng (không phải một bin duy nhất như trực
+        # giác), rồi `groupby` mặc định bỏ nhóm NaN. Nhánh này không đi qua
+        # `rs.empty` ở trên, nên nếu không chặn ở đây thì `min()` trả NaN —
+        # và cổng §10 đọc khoá này bằng `< ngưỡng` sẽ im lặng không kích hoạt,
+        # đúng vào ca thưa nhất có thể (0 decile dùng được).
+        out[f"min_cell_n_s{s}"] = float(cell_n.min()) if len(cell_n) else 0.0
     return out
 
 

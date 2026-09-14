@@ -396,3 +396,21 @@ def test_min_cell_n_reports_the_thinnest_decile():
     assert got["min_cell_n_s0"] == 1.0
     assert got["deciles_used_s1"] == 2.0
     assert got["min_cell_n_s1"] == 51.0
+
+
+def test_min_cell_n_is_zero_not_nan_when_every_rel_range_is_identical():
+    """Ca suy biến: rel_range gộp là một hằng số duy nhất. `pd.qcut` với
+    `duplicates="drop"` trả NaN cho mọi dòng chứ không gộp về một bin, nên
+    groupby bỏ sạch và `cell_n` rỗng dù `rs` không rỗng.
+
+    Quy ước của ba nhánh thoát sớm kia là 0.0. Nhánh này phải theo cùng quy
+    ước: NaN sẽ làm mọi so sánh `min_cell_n < ngưỡng` ở cổng §10 ra False, tức
+    tín hiệu "ô thưa" tắt tiếng đúng lúc dữ liệu thưa nhất."""
+    recs = [{"slot": s, "rel_range": 3.0, "h_avail": 10_000,
+             "t_up": 1.0, "t_dn": 1.0} for s in range(6) for _ in range(5)]
+    got = stat_kill_rate_standardized(mk_rows(recs), bar_seconds=60,
+                                      horizon_min=720, n_deciles=10)
+    for s in range(6):
+        assert got[f"deciles_used_s{s}"] == 0.0
+        assert got[f"min_cell_n_s{s}"] == 0.0
+        assert isinstance(got[f"min_cell_n_s{s}"], float)
