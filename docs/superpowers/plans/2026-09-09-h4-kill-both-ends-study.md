@@ -2353,7 +2353,7 @@ Rồi commit kết quả riêng (results/ nằm trong .gitignore ở repo này �
 | spec | task |
 |---|---|
 | §2.1 lưới neo 17:00 NY, sáu slot, DST | Task 1 |
-| §2.2 số thật của lưới | Task 2 Step 4 (kiểm tay: 2385 ngày, 179/240/238 bar) |
+| §2.2 số thật của lưới | Task 2 Step 4 (đo thật: **2303 ngày** sống sót cả ba luật loại — Ruling 5; 2385 là số ngày *có mặt* cả sáu slot, không phải cỡ mẫu) |
 | §2.3a thiên lệch độ rộng | Task 5 (③) |
 | §2.3b thiên lệch đơn vị USD | Task 6 (`*_by_year`) + Task 10 (cảnh báo trong `summary.md`) |
 | §3.1 `label_h4` | Task 1 |
@@ -2362,7 +2362,7 @@ Rồi commit kết quả riêng (results/ nằm trong .gitignore ở repo này �
 | §4.1 bốn nguyên thuỷ | Task 3 |
 | §4.2 hai định nghĩa cửa sổ | Task 3 (`w_from`/`w_to`, `h_avail`) |
 | §4.3 ① ② | Task 4 |
-| §4.3 ③ | Task 5 |
+| §4.3 ③ | Task 5 (`std_s{k}`, `deciles_used_s{k}`, `min_cell_n_s{k}`) + Task 10 (bảng slot × decile với `n` từng ô, in trong `summary.md`) — Ruling 9 |
 | §4.3 ④ ⑤ ⑥ | Task 6 |
 | §4.3 ⑦ | Task 4 |
 | §4.4 ba dạng đơn vị | Task 6 (ATR trong stat, USD theo năm trong bảng báo cáo) |
