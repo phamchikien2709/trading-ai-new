@@ -472,21 +472,70 @@ def test_killed_range_atr_only_both_ends():
 
 def test_by_year_tables_are_dataframes_split_by_year():
     """Spec §2.3b: range median đi từ 2,56 USD (2017) lên 33,53 (2026), gấp 13
-    lần. Một phân vị USD gộp cả mẫu chỉ nói về 2025-2026, nên phải tách năm."""
+    lần. Một phân vị USD gộp cả mẫu chỉ nói về 2025-2026, nên phải tách năm.
+
+    Hai đầu phải cho số KHÁC NHAU và hai mask phải thật sự lọc. Bản đầu của
+    test này để `exc_up == exc_dn` và mọi dòng đều kill cả hai đầu, nên nó chỉ
+    chứng minh cái máy chung `_by_year` chạy — ba đột biến sống sót: lấy cột
+    `exc_up` cho `exc_dn`, bỏ `k_dn` khỏi mask của ⑥, và thay mọi mask bằng
+    all-True. Hai file này là dạng đơn vị dùng để đặt SL (§4.4), nên một
+    `exc_dn_p90` thực ra là số của đầu trên sẽ đi thẳng vào SL mà không ai kêu.
+    """
     rows = mk_rows([
         {"slot": 0, "year": 2017, "k_up": True, "exc_up": 1.0, "k_dn": True,
-         "exc_dn": 1.0, "range_usd": 3.0},
+         "exc_dn": 2.0, "range_usd": 3.0},
         {"slot": 0, "year": 2026, "k_up": True, "exc_up": 30.0, "k_dn": True,
-         "exc_dn": 30.0, "range_usd": 40.0},
+         "exc_dn": 50.0, "range_usd": 40.0},
+        # chỉ kill đầu trên: không được vào bảng ⑥, và exc_up của nó là NaN
+        {"slot": 0, "year": 2026, "k_up": True, "k_dn": False, "range_usd": 999.0},
+        # không kill đầu nào: exc_up lớn nhưng mask k_up phải chặn lại
+        {"slot": 0, "year": 2026, "k_up": False, "k_dn": False, "exc_up": 999.0,
+         "range_usd": 888.0},
     ])
     exc = excursion_usd_by_year(rows)
     assert set(exc["year"]) == {2017, 2026}
-    assert float(exc[exc["year"] == 2017]["exc_up_max"].iloc[0]) == 1.0
-    assert float(exc[exc["year"] == 2026]["exc_up_max"].iloc[0]) == 30.0
+    y17 = exc[exc["year"] == 2017]
+    y26 = exc[exc["year"] == 2026]
+    assert float(y17["exc_up_max"].iloc[0]) == 1.0
+    assert float(y17["exc_dn_max"].iloc[0]) == 2.0      # 2.0 chứ không phải 1.0
+    assert float(y26["exc_up_max"].iloc[0]) == 30.0     # 999.0 bị mask k_up chặn
+    assert float(y26["exc_up_n"].iloc[0]) == 1.0
+    assert float(y26["exc_dn_max"].iloc[0]) == 50.0     # cột exc_dn, không phải exc_up
+    assert float(y26["n_rows"].iloc[0]) == 3.0
     rng = killed_range_usd_by_year(rows)
-    assert float(rng[rng["year"] == 2026]["range_usd_max"].iloc[0]) == 40.0
+    r26 = rng[rng["year"] == 2026]
+    assert float(r26["range_usd_max"].iloc[0]) == 40.0   # 999.0 chỉ kill một đầu
+    assert float(r26["range_usd_n"].iloc[0]) == 1.0      # 888.0 không kill đầu nào
 
 
 def test_empty_percentile_block_gives_nan_and_zero_n():
     got = stat_excursion_atr(mk_rows([]))
     assert np.isnan(got["exc_up_atr_s0_p90"]) and got["exc_up_atr_s0_n"] == 0.0
+
+
+def test_excursion_atr_drops_rows_whose_day_atr_is_nan():
+    """`atr_wilder(period=14)` trả NaN cho 13 ngày đầu chuỗi, nên `day_atr` —
+    và qua đó `rel_range` — là NaN ở ~13 ngày giao dịch đầu mẫu, trong khi
+    những dòng ấy vẫn có `k_up`/`k_dn` bình thường. Bộ lọc `np.isfinite` của
+    `_pct_block` là thứ duy nhất chặn chúng; bỏ nó đi thì cả slot ra NaN cho
+    mọi phân vị, không phải lệch nhẹ. Task 5 đã coi NaN `rel_range` là ca sản
+    xuất thật và có test riêng — đây là bản tương đương cho ⑤."""
+    rows = mk_rows([
+        {"slot": 0, "k_up": True, "exc_up": 1.0, "day_atr": 10.0},
+        {"slot": 0, "k_up": True, "exc_up": 5.0, "day_atr": np.nan},
+    ])
+    got = stat_excursion_atr(rows)
+    assert got["exc_up_atr_s0_n"] == 1.0
+    assert got["exc_up_atr_s0_p50"] == 0.1
+    assert got["exc_up_atr_s0_max"] == 0.1
+
+
+def test_killed_range_atr_drops_rows_whose_rel_range_is_nan():
+    """Bản tương đương của test trên cho ⑥ — cùng nguồn NaN, cùng hậu quả."""
+    rows = mk_rows([
+        {"slot": 0, "k_up": True, "k_dn": True, "rel_range": 0.5},
+        {"slot": 0, "k_up": True, "k_dn": True, "rel_range": np.nan},
+    ])
+    got = stat_killed_range_atr(rows)
+    assert got["killed_rel_range_s0_n"] == 1.0
+    assert got["killed_rel_range_s0_max"] == 0.5
