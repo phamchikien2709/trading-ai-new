@@ -37,6 +37,12 @@ AFTER_HOUR = 18
 MIN_SCORE = 0.70
 MIN_MARGIN = 0.30
 MIN_GAPS = 30
+# Một offset cố định được coi là "mảnh vỡ đáng kể" của zone thắng khi điểm của
+# nó >= ngưỡng này. 0,20 chọn theo số đo thật ở docstring trên: cách đọc SAI
+# lệch ±1h/±2h chỉ đạt 0,0020–0,0181, nên 0,20 cách nền nhiễu hơn mười lần và
+# không thể do trùng hợp. Mặt trên thì một nguồn có DST chia năm thành hai
+# mảnh cỡ 0,3–0,6, nên 0,20 không cắt nhầm mảnh nhỏ hơn của cặp.
+SPLIT_MIN_SHARE = 0.20
 CANDIDATE_OFFSETS = tuple(range(-12, 15))
 CANDIDATE_ZONES = ("America/New_York", "Europe/Athens")
 
@@ -89,6 +95,27 @@ def _hour_hits(ny: pd.DatetimeIndex, idx: np.ndarray, want: int) -> float:
     return float(np.mean(hour == want))
 
 
+def _zone_win_note(best: str, bs: float,
+                   scored: list[tuple[str, float]]) -> str:
+    """Câu giải thích VÌ SAO một zone có tên thắng — spec §6.1 đòi cổng in ra.
+
+    "Zone thắng" tự nó không nói gì. Cái đáng in là cơ chế: nguồn có DST nên
+    mọi offset cố định chỉ khớp được một nửa năm, điểm của chúng bị chia đôi,
+    còn zone có tên gộp cả hai nửa lại. Không in cái này thì người đọc báo cáo
+    không phân biệt được "zone thắng vì nguồn đúng là zone đó" với "zone thắng
+    vì may rủi trên một bộ dữ liệu rác".
+    """
+    parts = [(lab, s) for lab, s in scored
+             if lab not in CANDIDATE_ZONES and s >= SPLIT_MIN_SHARE]
+    if len(parts) < 2:
+        return (f"zone {best!r} thang voi {bs:.4f} nhung khong co hai offset co "
+                f"dinh nao dat >= {SPLIT_MIN_SHARE}: khong co bang chung DST "
+                f"chia doi")
+    body = " va ".join(f"{lab!r}={s:.4f}" for lab, s in parts)
+    return (f"nguon co DST: {body} bi chia doi, zone {best!r} gop lai duoc "
+            f"{bs:.4f}")
+
+
 def detect_source_tz(time: np.ndarray, bar_seconds: int) -> TzDetect:
     t = np.asarray(time, dtype="int64")
     if t.size < 2:
@@ -115,6 +142,8 @@ def detect_source_tz(time: np.ndarray, bar_seconds: int) -> TzDetect:
     best, bs = scored[0]
     runner, rs = scored[1]
     notes: list[str] = []
+    if best in CANDIDATE_ZONES:
+        notes.append(_zone_win_note(best, bs, scored))
     if bs < MIN_SCORE:
         notes.append(f"diem tot nhat {bs:.4f} < nguong {MIN_SCORE}")
     if bs - rs < MIN_MARGIN:
