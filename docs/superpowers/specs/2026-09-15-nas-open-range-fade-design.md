@@ -133,11 +133,20 @@ lastDownClose := close   khi   close < open
 đúng chữ "trước khi có cú breakout". Nếu cập nhật trước, một nến phá mà bản thân
 nó là nến đỏ sẽ tự lấy close của chính mình làm mốc.
 
-Biến này có **hai điểm xoá**, và cả hai đều xảy ra: một lần khi cửa sổ gom của
-phiên mới bắt đầu (§3.7 xoá sạch mọi thứ), và một lần nữa **khi range được
-chốt**. Điểm xoá thứ hai là điểm chịu lực: chỉ những nến sau lúc range đã cố
-định mới được làm mốc. Nến trong cửa sổ gom không được — lúc đó `rangeHigh`
-chưa tồn tại nên vế `lastDownClose < rangeHigh` của §3.4 không kiểm được.
+Biến này có **hai điểm xoá** trong code: một lần khi cửa sổ gom của phiên mới
+bắt đầu (§3.7 xoá sạch mọi thứ), và một lần nữa **khi range được chốt**.
+Nhưng chỉ điểm xoá **thứ nhất** thực sự chịu lực. Điểm xoá thứ hai là **phòng
+thủ thừa**: bước 6 (cập nhật `lastDownClose`/`lastUpClose`) chỉ chạy sau khi
+đã qua cổng "không còn trong cửa sổ gom" ở **cả hai** bản Pine lẫn oracle, và
+điểm xoá phiên mới (thứ nhất) đã xoá sạch hai biến này trước đó trong cùng
+phiên. Vì vậy, giữa lúc phiên mới bắt đầu và lúc range được chốt, hai biến
+này **luôn đã là `na`/`None`** — không có gì để điểm xoá thứ hai xoá cả. Diễn
+giải cũ ("nến trong cửa sổ gom không được làm mốc") mô tả đúng **hệ quả**
+nhưng gán sai **nguyên nhân**: nến trong cửa sổ gom bị loại bởi chính cổng
+cửa sổ (bước 1 luôn `continue`/bỏ qua khi còn `inWin`), không phải bởi điểm
+xoá thứ hai. Điểm xoá thứ hai được giữ lại vì nó rẻ và vì nó sẽ bắt đầu có
+tác dụng thật nếu sau này ai đó dời cổng cửa sổ đi — nhưng ở trạng thái code
+hiện tại, đừng khẳng định nó đang làm việc gì.
 
 ### 3.4 Ba điều kiện để arm
 
@@ -223,10 +232,16 @@ một bit so với bản không gác.
 nến — feed chậm, hoặc mở chart giữa chừng một nến — thì nến đó không sinh **cả**
 mũi tên lẫn alert.
 
-Cú phá **không mất hẳn**. Vì cả sáu bước của §3.5 đều nằm sau cùng một cổng
-`barstate.isconfirmed`, một nến bị lỡ thì **không bước nào** chạy cho nó — kể cả
-bước 6, nên `lastDownClose` cũng không trôi theo nó. Nến xác nhận kế tiếp vẫn
-thấy `upEligible` còn bật và vẫn arm nếu còn đóng cửa trên biên.
+Cú phá **không mất hẳn** — nhưng lập luận này chỉ đúng cho **sáu bước của
+§3.5**, không đúng cho bước 0 (xoá trạng thái phiên mới, §3.7). Vì cả sáu
+bước đó đều nằm sau cùng một cổng `barstate.isconfirmed`, một nến bị lỡ thì
+**không bước nào trong sáu bước** chạy cho nó — kể cả bước 6, nên
+`lastDownClose` cũng không trôi theo nó. Nến xác nhận kế tiếp vẫn thấy
+`upEligible` còn bật và vẫn arm nếu còn đóng cửa trên biên.
+
+Bước 0 thì khác hẳn: nó không idempotent, mà là một **sự kiện cạnh lên**
+(`newSess`), chỉ đúng trên đúng một nến — xem §11 mục 7 để biết hậu quả khi
+đúng nến đó bị lỡ.
 
 Hai hệ quả thật, nhỏ hơn nhưng có thật: cú phá được ghi nhận **muộn một nến**,
 và nếu chính nến bị lỡ là một nến đỏ thì nó **không được xét làm mốc** —
@@ -399,3 +414,106 @@ file này.
 6. **`box` là loại đối tượng đầu tiên trong repo có trần bị chạm thật.** Các file
    trước dùng `label` (500, hiếm khi chạm) hoặc `plot` (không trần). Ở đây trần
    bị chạm sau nửa năm lịch sử, tức chắc chắn sẽ xảy ra với người dùng thật.
+
+7. **Xoá trạng thái phiên (bước 0) là edge-triggered, không phải
+   idempotent, và nằm sau cùng cổng `isconfirmed` như sáu bước còn lại.**
+   §4 lập luận "một nến bị lỡ thì không bước nào chạy cho nó" — lập luận đó
+   **đúng cho sáu bước của §3.5**, nhưng **sai cho bước 0**. Bước 0 chạy
+   khi:
+
+   ```pine
+   bool newSess = (inWin1 and not nz(inWin1[1], false))
+        or (inWin2 and not nz(inWin2[1], false))
+   ```
+
+   Đây là một **sự kiện cạnh lên**: `newSess` chỉ đúng trên đúng một nến —
+   nến đầu tiên bước vào cửa sổ gom. Nếu đúng nến đó không chạy dưới cổng
+   `isconfirmed` (đứt feed, hoặc script gián đoạn ngay lúc chart bước qua
+   mốc 07:00/19:00), thì nến xác nhận kế tiếp có `inWin1[1] == true` (hoặc
+   `inWin2[1] == true`), `newSess` là **false**, và **bước xoá không bao
+   giờ chạy cho phiên đó**. Không có nến nào khác bù lại — cửa sổ đó vĩnh
+   viễn mất lượt reset của mình.
+
+   Hậu quả dây chuyền, tất cả im lặng, không lỗi, không cảnh báo:
+
+   - `rangeHigh`/`rangeLow` không phải `na` nữa → nhánh `math.max`/`math.min`
+     chạy thay vì nhánh khởi tạo → **range phiên mới bị gộp với range phiên
+     trước** thay vì được tính lại từ đầu.
+   - `finalized` vẫn `true` từ phiên trước → khối chốt range (bước 1b)
+     không chạy lại → `rangeOk`, `upEligible`, `dnEligible`, `upArmed`,
+     `dnArmed`, `upLevel`, `dnLevel` đều giữ nguyên trạng thái của phiên
+     **trước**, áp dụng nhầm lên dữ liệu của phiên **này**.
+   - `nWin` cộng dồn qua nhiều phiên thay vì đếm lại từ 0 → bảng trạng thái
+     (§7) hiện số nến sai, và `sessName` hiện tên phiên **cũ** (vì
+     `sessName` cũng chỉ được gán trong khối bước 0) — alert JSON (§6) gắn
+     nhãn `"session"` sai theo.
+
+   Đây chính xác là chế độ hỏng mà §2.2 được viết ra để tránh — "không lỗi,
+   không cảnh báo, chỉ là một range sai" — nhưng đến từ một cửa khác
+   (script gián đoạn đúng lúc chuyển phiên) chứ không phải từ
+   `request.security`.
+
+   Lỗi này **tự lành khi reload chart**: nạp lại lịch sử tính `newSess` từ
+   đầu trên toàn bộ nến đã có, nên bug chỉ tồn tại trong phiên live bị ảnh
+   hưởng, không lan sang phiên sau.
+
+   Có một trigger thứ hai, không cần chạy live mới gặp: `inWin1[1]` là
+   **nến ngay trước trong chuỗi dữ liệu đưa vào script**, không phải "phút
+   trước theo đồng hồ". Nếu thị trường đóng cửa rồi mở lại (cuối tuần, nghỉ
+   lễ) sao cho nến cuối cùng trước khi đóng cửa và nến đầu tiên sau khi mở
+   lại **cùng nằm trong cùng một cửa sổ gom** (ví dụ cả hai đều có
+   `inWin1 = true`), thì `inWin1[1]` vẫn `true` ở nến đầu tiên sau gap và
+   `newSess` vẫn câm — không cần lỗi feed, chỉ cần lịch thị trường bình
+   thường xếp đúng chỗ.
+
+   **Vì sao oracle không lộ chuyện này:** oracle reset theo **so sánh giá
+   trị** (`if s != cur: ...`, xem `tests/pine_oracles/orfade_oracle.py`) —
+   tức **level-triggered**, không phải edge-triggered. Oracle nhận sẵn
+   `session[i]` là một nhãn đã tính rồi; nó không mô phỏng việc script bị
+   lỡ mất đúng nến cạnh lên. Ở khía cạnh này oracle **an toàn hơn** bản
+   Pine thật — và chính sự chênh lệch đó là lý do oracle không bao giờ có
+   thể bắt được điểm giòn này của Pine bằng mutation testing hay bất kì
+   test nào khác đối chiếu với nó. Đây là một giới hạn thật của phương
+   pháp kiểm chứng bằng oracle, không phải một lỗ hổng có thể vá bằng cách
+   thêm test.
+
+8. **Trạng thái sống qua mọi lần đóng cửa thị trường trong tuần, không bị
+   giới hạn trong phạm vi một ngày.** Không có gì trong máy trạng thái buộc
+   nó reset theo *ngày*. Ví dụ cụ thể: range của phiên tối thứ Sáu (19:00),
+   cùng với `upArmed`/`dnArmed`, `upLevel`/`dnLevel`,
+   `lastDownClose`/`lastUpClose`, sống liên tục — không hề bị đụng tới —
+   cho tới khi `newSess` kế tiếp trở thành true, tức **07:00 sáng thứ Hai**.
+   Mọi nến chạy từ lúc thị trường mở lại đầu tuần (thường sớm hơn nhiều so
+   với 07:00 thứ Hai giờ UTC+7, tuỳ sàn) cho tới 07:00 thứ Hai đều được xử
+   lý bằng **range của tối thứ Sáu** và **mốc `lastDownClose`/`lastUpClose`
+   được ghi nhận từ đêm thứ Sáu**.
+
+   Gap giá qua cuối tuần gần như luôn đẩy giá mở cửa ra ngoài range tối thứ
+   Sáu. Kịch bản thật: giá mở cửa đầu tuần nhảy qua khỏi `rangeHigh`/
+   `rangeLow` của tối thứ Sáu, rồi trong vài giờ đầu tuần quay lại xuyên
+   qua một `lastDownClose`/`lastUpClose` đã **ba ngày tuổi** — sinh ra một
+   tín hiệu (ví dụ BÁN) lúc khoảng 06:30 sáng thứ Hai, nhưng alert JSON vẫn
+   gắn nhãn `"session":"19:00"` — đúng về mặt kỹ thuật (đó đúng là phiên
+   chưa bị xoá), nhưng gây hiểu lầm nếu người đọc hình dung phiên 19:00 chỉ
+   kéo dài vài tiếng.
+
+   Về mặt câu chữ, spec không cấm điều này: §9 mục 2 nói rõ "không hạn
+   chờ", và §3.7 chỉ nói setup không sống qua *phiên* — mà phiên kế tiếp
+   đúng là 07:00 thứ Hai, không sớm hơn. Nhưng ví dụ minh hoạ ở §11 mục 2
+   ("armed lúc 08:15, bị xuyên lúc 11:40") gợi ý một khung thời gian vài
+   tiếng trong cùng ngày; không ai đọc ví dụ đó mà hình dung ra một khoảng
+   chờ 59 tiếng vắt qua cả cuối tuần. Và khác với hầu hết rủi ro khác trong
+   mục này, đây **không phải một trường hợp hiếm hay xác suất thấp** — nó
+   xảy ra **đều đặn mỗi tuần**, với mọi setup còn armed vào cuối phiên tối
+   thứ Sáu.
+
+   Hệ quả kéo theo cho việc đọc `wait` (§9 mục 2, §11 mục 2): `wait` đếm
+   **số nến 1m**, không đếm phút hay giờ theo đồng hồ. Trên chuỗi nến liền
+   mạch trong ngày, một đơn vị `wait` xấp xỉ một phút — hai con số gần như
+   trùng nhau. Nhưng qua một khoảng gián đoạn thị trường (cuối tuần, nghỉ
+   lễ), `wait` vẫn chỉ đếm nến đã xử lý, nên `wait = 5` có thể là 5 phút
+   trong một phiên liền mạch, hoặc là 5 nến trải dài qua một kỳ nghỉ cuối
+   tuần. Phân phối `wait` — thứ §11 mục 2 nói phải luôn nhìn kèm số lượng
+   tín hiệu — do đó **trộn lẫn hai đơn vị đo khác nhau** (nến-liền-mạch và
+   nến-vắt-qua-gap) mà không có cột nào trong bảng (§7) hay trường nào
+   trong alert JSON (§6) đánh dấu sự khác biệt đó.
