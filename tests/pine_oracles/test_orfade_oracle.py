@@ -294,3 +294,80 @@ def test_tat_mot_chieu_khong_anh_huong_chieu_kia():
 
     assert run(bars, sess, win, min_range_bars=2, enable_up=False) == []
     assert len(run(bars, sess, win, min_range_bars=2, enable_down=False)) == 1
+
+
+def test_dn_moc_duoi_bien_khong_arm():
+    """Finding 2a: Moc phai tren bien."""
+    bars = [Bar(100, 110, 90, 105), Bar(105, 108, 95, 100),
+            Bar(95, 100, 94, 88), Bar(95, 96, 85, 86),
+            Bar(86, 87, 84, 85)]
+    session = ["S1"] * 5
+    in_window = [True, True, False, False, False]
+
+    got = run(bars, session, in_window, min_range_bars=2)
+
+    assert got == []
+
+
+def test_eligible_bat_hai_chieu():
+    """Finding 3: Eligible bat ca hai."""
+    bars, sess, win = mk([
+        (100, 110, 90, 105),      # 0 cua so
+        (105, 108, 95, 100),      # 1 cua so
+        (95, 100, 94, 99),        # 2 xanh -> last_up = 99
+        (95, 96, 85, 86),         # 3 pha xuong -> dn_el = False
+        (86, 100, 85, 95),        # 4 trong range -> up_el = dn_el = True
+        (95, 96, 84, 85),         # 5 duoi rl -> arm o 99
+        (85, 102, 84, 100),       # 6 mua -> ban
+    ])
+
+    got = run(bars, sess, win, min_range_bars=2)
+
+    assert len(got) == 1
+    assert got[0].direction == BUY
+
+
+def test_ban_tuy_chieu():
+    """Test ban: level va close khop."""
+    bars, sess, win = mk([
+        (100, 110, 90, 105),      # 0 cua so
+        (105, 108, 95, 100),      # 1 cua so
+        (105, 106, 100, 102),     # 2 do -> last_dn = 102
+        (103, 115, 102, 112),     # 3 pha len -> arm o 102
+        (112, 113, 100, 101),     # 4 ban
+    ])
+
+    got = run(bars, sess, win, min_range_bars=2)
+
+    assert got[0].direction == SELL
+    assert got[0].level == 102
+    assert got[0].close == 101
+
+
+def test_mua_tuy_chieu():
+    """Test mua: level va close khop."""
+    bars, sess, win = mk([
+        (100, 110, 90, 105),      # 0 cua so
+        (105, 108, 95, 100),      # 1 cua so
+        (95, 100, 94, 99),        # 2 xanh -> last_up = 99
+        (95, 96, 85, 86),         # 3 pha xuong -> arm o 99
+        (86, 102, 85, 100),       # 4 mua
+    ])
+
+    got = run(bars, sess, win, min_range_bars=2)
+
+    assert got[0].direction == BUY
+    assert got[0].level == 99
+    assert got[0].close == 100
+
+
+def test_window_quá_nhỏ():
+    """Min range bars check."""
+    bars = [Bar(100, 110, 90, 105), Bar(105, 106, 100, 102),
+            Bar(103, 115, 102, 112), Bar(112, 113, 100, 101)]
+    session = ["S1"] * 4
+    in_window = [True, False, False, False]
+
+    got = run(bars, session, in_window, min_range_bars=2)
+
+    assert got == []
