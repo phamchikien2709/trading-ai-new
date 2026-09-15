@@ -134,6 +134,22 @@ def test_mua_guong_qua_75():
     assert b.wait == 2
 
 
+def test_rsi_dung_bang_muc_giua_khong_mua():
+    """Doi xung voi test_rsi_dung_bang_muc_giua_khong_ban, o chieu MUA.
+
+    Luat la `<` chat. 50.0 chan; 49.5 moi mua.
+    """
+    bars = [Bar(110, 105, 108), Bar(115, 110, 112), Bar(114, 109, 111),
+            Bar(113, 108, 110)]
+    rsi = [50.0, 80.0, 50.0, 49.5]
+    atr = [2.0] * 4
+
+    got = run(bars, rsi, atr)
+
+    assert len(got) == 1
+    assert got[0].direction == BUY and got[0].bar == 3
+
+
 def test_rsi_nhay_tu_24_len_80_trong_mot_nen():
     """Khoi BAN chay TRUOC khoi MUA tren cung mot nen: ban ban ra roi pha mua
     moi mo. Hai chieu khong bao gio cung SEEKING.
@@ -171,6 +187,31 @@ def test_atr_bang_0_khong_ban_nhung_van_tieu_thu_setup():
     assert len(got) == 1
     assert got[0].bar == 5
     assert got[0].wait == 1
+
+
+def test_atr_bang_0_khong_mua_nhung_van_tieu_thu_setup():
+    """Doi xung voi test_atr_bang_0_khong_ban_nhung_van_tieu_thu_setup, o
+    chieu MUA: atr=0 -> khong do duoc rui ro -> khong ban, nhung setup van
+    bi tieu thu nen cu vuot 75 o nen 3 mo mot cua so MOI.
+
+    `cho == 1` la bang chung: neu cua so cu (mo o nen 1) con song thi cho se
+    la 4 - 1 = 3.
+    """
+    bars = [Bar(150, 145, 148), Bar(200, 195, 199), Bar(198, 193, 196),
+            Bar(204, 199, 200), Bar(202, 199, 201)]
+    rsi = [50.0, 80.0, 45.0, 80.0, 45.0]
+    atr = [0.0, 0.0, 0.0, 2.0, 2.0]
+
+    got = run(bars, rsi, atr)
+
+    assert len(got) == 1
+    s = got[0]
+    assert s.direction == BUY and s.bar == 4
+    assert s.entry == 201.0
+    assert s.sl == 195.0
+    assert s.tp == 206.0
+    assert s.rr == 5 / 6
+    assert s.wait == 1
 
 
 def test_tat_mot_chieu_khong_anh_huong_chieu_kia():
