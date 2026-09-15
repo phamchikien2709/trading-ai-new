@@ -459,3 +459,123 @@ def test_nen_none_khong_gop_gi_vao_may_trang_thai():
     got = run(bars, session, in_window, min_range_bars=2)
 
     assert got == [Signal(SELL, 11, 102, 101, 1, "S2")]
+
+
+def test_ban_disarm_sau_khi_ban_da_ban_khong_ban_lai():
+    """F1 (vong soat cuoi). Sau khi tin hieu BAN da ban, up_armed phai tat
+    (disarm). Neu khong, MOI nen tiep theo dong duoi up_level se lai sinh
+    them mot tin hieu BAN trung lap cho CUNG mot cu pha — tren chart that,
+    mot nhip troi nhieu nen duoi upLevel se sinh nhieu mui ten va nhieu
+    alert() trung nhau cho cung mot setup.
+
+    Noi tiep test_ban_day_du: sau nen 6 (BAN, level=102, close=101), them
+    nen 7 dong 97, van duoi 102. Neu up_armed khong bi tat o buoc 2 thi
+    nen 7 cung ban -> len(got) == 2. Dung phai chi co 1 tin hieu cho ca
+    chuoi.
+    """
+    bars, sess, win = mk([
+        (100, 110, 90, 105),      # 0 cua so
+        (105, 108, 95, 100),      # 1 cua so
+        (100, 104, 99, 103),      # 2 xanh, trong range
+        (106, 107, 101, 102),     # 3 DO  -> last_dn = 102
+        (103, 115, 102, 112),     # 4 pha len
+        (112, 113, 108, 109),     # 5 do, ve trong range
+        (109, 110, 100, 101),     # 6 do, xuyen muc -> BAN
+        (101, 102, 96, 97),       # 7 do, van duoi 102 -> KHONG duoc ban lai
+    ])
+
+    got = run(bars, sess, win, min_range_bars=2)
+
+    assert len(got) == 1
+    assert got[0].bar == 6
+
+
+def test_mua_disarm_sau_khi_mua_da_ban_khong_ban_lai():
+    """F1 (vong soat cuoi), chieu MUA soi guong. Sau khi tin hieu MUA da
+    ban, dn_armed phai tat. Neu khong, nen tiep theo dong tren dn_level se
+    sinh them mot tin hieu MUA trung lap cho CUNG mot cu pha.
+
+    Noi tiep test_mua_guong_qua_bien_duoi: sau nen 4 (MUA, level=99,
+    close=100), them nen 5 dong 100, van tren 99. Neu dn_armed khong bi tat
+    thi nen 5 cung ban -> len(got) == 2.
+    """
+    bars, sess, win = mk([
+        (100, 110, 90, 105),      # 0 cua so
+        (105, 108, 95, 100),      # 1 cua so
+        (95, 100, 94, 99),        # 2 XANH -> last_up = 99
+        (95, 96, 85, 86),         # 3 pha xuong -> arm o 99
+        (86, 102, 85, 100),       # 4 xanh, 100 > 99 -> MUA
+        (98, 101, 97, 100),       # 5 xanh, van tren 99 -> KHONG duoc ban lai
+    ])
+
+    got = run(bars, sess, win, min_range_bars=2)
+
+    assert len(got) == 1
+    assert got[0].bar == 4
+
+
+def test_doji_khong_duoc_dat_last_up_va_lam_hong_muc_pha_xuong():
+    """F4 (vong soat cuoi). Spec 3.3: doji (close == open) khong duoc cap
+    nhat last_dn CUNG KHONG duoc cap nhat last_up.
+
+    nen 2 XANH close=99 -> last_up that = 99 (X).
+    nen 3 DOJI open=close=102 -> khong doi gi (dung). Neu dieu kien
+    `elif bar.c > bar.o` bi doi thanh `else` (bat ky nen nao khong DO deu
+    duoc coi la XANH) thi doji nay se dat last_up = 102 (Y), sai vi no
+    khong phai nen xanh that.
+    nen 4 do, dong 85 < rl(90) -> pha xuong, arm o last_up hien co
+    (X=99 dung, hoac Y=102 neu hong).
+    nen 5 xanh dong 100: 100 > 99 (X) -> MUA ngay, level=99, wait=1.
+    Neu moc la 102 (Y) thi 100 khong > 102 -> KHONG ban gi ca o day.
+    """
+    bars, sess, win = mk([
+        (100, 110, 90, 105),      # 0 cua so
+        (105, 108, 95, 100),      # 1 cua so
+        (95, 100, 94, 99),        # 2 XANH -> last_up = 99 = X
+        (102, 105, 99, 102),      # 3 DOJI open=close=102 -> khong doi gi
+        (91, 92, 84, 85),         # 4 do, pha xuong -> arm o last_up
+        (95, 101, 94, 100),       # 5 xanh, dong 100
+    ])
+
+    got = run(bars, sess, win, min_range_bars=2)
+
+    assert len(got) == 1
+    s = got[0]
+    assert s.direction == BUY
+    assert s.level == 99
+    assert s.bar == 5
+    assert s.wait == 1
+    assert s.close == 100
+
+
+def test_dong_dung_bang_bien_tren_bat_lai_up_eligible():
+    """F5 (vong soat cuoi). Spec 3.2: `upEligible` bat lai khi
+    `rangeLow <= close <= rangeHigh` — bao ham CA HAI bien, khong phai
+    khoang mo.
+
+    nen 3 pha len lan 1 -> arm o 102 (tu nen 2), up_bar=3, up_el=False.
+    nen 4 xanh dong DUNG BANG rangeHigh (110) -> neu dung `<=` (dung) thi
+    up_el bat lai True; neu dung `<` chat (hong) thi up_el van False.
+    nen 5 dong 115 > rh, pha len LAN HAI: chi duoc tinh la cu pha moi (va
+    re-arm, doi up_bar tu 3 sang 5) NEU up_el dang True tu nen 4.
+    nen 6 dong 101 < 102 -> BAN. Dung: up_bar=5 nen wait = 6-5 = 1. Neu
+    khong bat lai duoc up_el o nen 4 thi up_bar van la 3, wait = 6-3 = 3.
+    """
+    bars, sess, win = mk([
+        (100, 110, 90, 105),      # 0 cua so
+        (105, 108, 95, 100),      # 1 cua so
+        (106, 107, 101, 102),     # 2 DO -> last_dn = 102
+        (103, 115, 102, 112),     # 3 pha len lan 1 -> arm o 102, up_bar=3
+        (105, 111, 104, 110),     # 4 xanh, dong DUNG BANG rangeHigh (110)
+        (105, 116, 104, 115),     # 5 dong 115 > rh -> pha len lan 2 (neu duoc)
+        (112, 113, 100, 101),     # 6 do, 101 < 102 -> BAN
+    ])
+
+    got = run(bars, sess, win, min_range_bars=2)
+
+    assert len(got) == 1
+    s = got[0]
+    assert s.direction == SELL
+    assert s.level == 102
+    assert s.bar == 6
+    assert s.wait == 1
