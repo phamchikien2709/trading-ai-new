@@ -223,6 +223,131 @@ def test_tat_mot_chieu_khong_anh_huong_chieu_kia():
     assert len(run(bars, rsi, atr, enable_buy=False)) == 1
 
 
+def test_setup_bi_tieu_thu_ke_ca_khi_tat_chieu_do():
+    """Spec 2.7: `sSt := 0` nam NGOAI moi if con cua buoc 2, nen setup van bi
+    tieu thu KE CA KHI chieu do bi tat -- cung tinh than voi
+    test_atr_bang_0_khong_ban_nhung_van_tieu_thu_setup, nhung o day "khong do
+    duoc rui ro" duoc thay bang "chieu bi tat".
+
+    `enable_sell`/`enable_buy` la tham so cua CA LAN GOI, khong doi giua
+    chung nen khong the tat nua dau, bat nua sau trong MOT lan goi run(). Vi
+    the phep thu chia hai buoc tren CUNG mot chuoi hai pha lien tiep:
+
+      1. goi voi chieu do TAT ca chuoi -- khong tin hieu nao ban o CA HAI
+         pha (khong chi pha dau).
+      2. goi LAI dung chuoi do voi chieu do BAT -- vi run() la mot lan mo
+         phong doc lap moi lan goi (khong giu trang thai giua hai lan goi),
+         day chinh la phep do "neu tat roi bat lai thi co bat dau sach hay
+         khong": ca hai pha phai ban duoc, va `wait` cua pha thu hai phai
+         tinh tu XBAR RIENG cua no (nho), khong dinh vao pha dau tien.
+    """
+    bars = [Bar(110, 105, 108), Bar(104, 100, 101), Bar(105, 100, 104),
+            Bar(103, 98, 99), Bar(104, 99, 103)]
+    rsi = [60.0, 20.0, 55.0, 20.0, 55.0]
+    atr = [2.0] * 5
+
+    assert run(bars, rsi, atr, enable_sell=False) == []
+
+    got = run(bars, rsi, atr, enable_sell=True)
+    assert len(got) == 2
+    assert got[0].direction == SELL and got[0].bar == 2 and got[0].wait == 1
+    assert got[1].direction == SELL and got[1].bar == 4 and got[1].wait == 1
+
+    bars_buy = [Bar(150, 145, 148), Bar(200, 195, 199), Bar(198, 193, 196),
+                Bar(203, 198, 200), Bar(198, 193, 197)]
+    rsi_buy = [50.0, 80.0, 45.0, 80.0, 45.0]
+
+    assert run(bars_buy, rsi_buy, atr, enable_buy=False) == []
+
+    got_buy = run(bars_buy, rsi_buy, atr, enable_buy=True)
+    assert len(got_buy) == 2
+    assert (got_buy[0].direction == BUY and got_buy[0].bar == 2
+            and got_buy[0].wait == 1)
+    assert (got_buy[1].direction == BUY and got_buy[1].bar == 4
+            and got_buy[1].wait == 1)
+
+
+def test_rsi_dung_bang_25_khong_mo_pha_ban():
+    """Khong test nao truoc day dung RSI DUNG BANG 25. Luat la `r < lo`
+    (chat), nen 25.0 khong duoc mo pha -- phai la 24.9 tro xuong."""
+    bars = [Bar(110, 105, 108), Bar(104, 100, 101), Bar(105, 100, 104)]
+    rsi = [60.0, 25.0, 55.0]
+    atr = [2.0] * 3
+
+    assert run(bars, rsi, atr) == []
+
+
+def test_rsi_24_9_moi_mo_pha_ban():
+    """Doi xung voi test tren: 24.9 moi thuc su mo pha."""
+    bars = [Bar(110, 105, 108), Bar(104, 100, 101), Bar(105, 100, 104)]
+    rsi = [60.0, 24.9, 55.0]
+    atr = [2.0] * 3
+
+    got = run(bars, rsi, atr)
+    assert len(got) == 1
+    assert got[0].bar == 2
+
+
+def test_rsi_dung_bang_75_khong_mo_pha_mua():
+    """Guong voi test_rsi_dung_bang_25_khong_mo_pha_ban. Luat la `r > hi`
+    (chat), nen 75.0 khong duoc mo pha -- phai la 75.1 tro len."""
+    bars = [Bar(150, 145, 148), Bar(200, 195, 199), Bar(198, 193, 196)]
+    rsi = [50.0, 75.0, 45.0]
+    atr = [2.0] * 3
+
+    assert run(bars, rsi, atr) == []
+
+
+def test_rsi_75_1_moi_mo_pha_mua():
+    """Doi xung voi test tren: 75.1 moi thuc su mo pha."""
+    bars = [Bar(150, 145, 148), Bar(200, 195, 199), Bar(198, 193, 196)]
+    rsi = [50.0, 75.1, 45.0]
+    atr = [2.0] * 3
+
+    got = run(bars, rsi, atr)
+    assert len(got) == 1
+    assert got[0].bar == 2
+
+
+def test_tp_dung_atr_cua_nen_entry_khong_phai_nen_mo_pha():
+    """Ca 13 vector truoc F7 deu dung ATR HANG trong moi test, nen khong gi
+    ghim duoc ATR lay o nen nao: neu code lay ATR cua nen MO PHA (luc thung
+    25) thay vi nen ENTRY (luc bat tin hieu) thi khong test nao trong so do
+    phat hien duoc, vi hai gia tri giong het nhau.
+
+    O day ATR nen mo pha (nen 1) = 5.0, ATR nen entry (nen 2) = 3.0 -- khac
+    han nhau. TP va rr dung tren PHAI dung ATR nen entry (3.0).
+    """
+    bars = [Bar(110, 105, 108), Bar(104, 100, 101), Bar(105, 100, 104)]
+    rsi = [60.0, 20.0, 55.0]
+    atr = [2.0, 5.0, 3.0]
+
+    got = run(bars, rsi, atr)
+
+    assert len(got) == 1
+    s = got[0]
+    assert s.entry == 104.0
+    assert s.sl == 113.0          # 104 + 3*3.0 (atr nen entry)
+    assert s.tp == 97.0           # 100 - 1*3.0 (atr nen entry, KHONG phai 95.0 = 100 - 1*5.0)
+    assert s.rr == 7 / 9
+
+
+def test_tp_mua_dung_atr_cua_nen_entry_khong_phai_nen_mo_pha():
+    """Doi xung voi test tren, o chieu MUA."""
+    bars = [Bar(150, 145, 148), Bar(200, 195, 199), Bar(198, 193, 196)]
+    rsi = [50.0, 80.0, 45.0]
+    atr = [2.0, 5.0, 3.0]
+
+    got = run(bars, rsi, atr)
+
+    assert len(got) == 1
+    s = got[0]
+    assert s.entry == 196.0
+    assert s.sl == 187.0          # 196 - 3*3.0 (atr nen entry)
+    assert s.tp == 203.0          # 200 + 1*3.0 (atr nen entry, KHONG phai 205.0 = 200 + 1*5.0)
+    assert s.rr == 7 / 9
+
+
 def test_warm_up_khong_lam_gi():
     """rsi hoac atr la None thi khong trang thai nao doi."""
     bars = [Bar(110, 105, 108), Bar(104, 100, 101), Bar(103, 99, 100),
