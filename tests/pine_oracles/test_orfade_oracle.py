@@ -8,7 +8,7 @@ THU TU sau buoc trong mot nen.
 
 Moi test dung min_range_bars=2 cho gon; mac dinh that la 30.
 """
-from orfade_oracle import BUY, SELL, Bar, run
+from orfade_oracle import BUY, SELL, Bar, Signal, run
 
 
 def mk(rows, sess="S1", n_window=2):
@@ -297,77 +297,165 @@ def test_tat_mot_chieu_khong_anh_huong_chieu_kia():
 
 
 def test_dn_moc_duoi_bien_khong_arm():
-    """Finding 2a: Moc phai tren bien."""
-    bars = [Bar(100, 110, 90, 105), Bar(105, 108, 95, 100),
-            Bar(95, 100, 94, 88), Bar(95, 96, 85, 86),
-            Bar(86, 87, 84, 85)]
-    session = ["S1"] * 5
-    in_window = [True, True, False, False, False]
+    """F2a: moc chieu xuong phai o TREN bien duoi (last_up > rl), khong chi
+    khac None.
 
-    got = run(bars, session, in_window, min_range_bars=2)
+    nen 2 XANH dong 82 < rl(90) -> last_up = 82, la mot moc SAI PHIA (duoi
+    ca bien duoi). nen 3 do dong 85 < rl -> pha xuong, nhung last_up(82)
+    khong > rl(90) nen KHONG duoc arm. Neu bo dieu kien nay (chi con
+    last_up is not None) thi no se arm o muc 82 va nen 4 (dong 90 > 82) se
+    ban MUA gia.
+    """
+    bars, sess, win = mk([
+        (100, 110, 90, 105),      # 0 cua so
+        (105, 108, 95, 100),      # 1 cua so
+        (80, 85, 78, 82),         # 2 XANH, dong duoi rl -> last_up = 82 (sai phia)
+        (88, 89, 80, 85),         # 3 do, pha xuong nhung moc sai phia -> khong arm
+        (85, 95, 84, 90),         # 4 neu da arm o 82 thi day da MUA gia (90 > 82)
+    ])
+
+    got = run(bars, sess, win, min_range_bars=2)
 
     assert got == []
 
 
 def test_eligible_bat_hai_chieu():
-    """Finding 3: Eligible bat ca hai."""
+    """F3: ve trong range phai reset CA HAI chieu eligible, khong chi
+    upEligible.
+
+    nen 3 pha xuong arm o L1=97 (chua ban). nen 4 dong trong range -> phai
+    reset ca hai chieu. nen 5 xanh dat moc moi L2=93. nen 6 pha xuong LAN
+    HAI phai duoc tinh la cu pha moi (vi dn_el da duoc reset o nen 4) ->
+    re-arm o L2=93, bar=6. nen 7 dong 100 > 93 -> MUA, level=93, wait=7-6=1.
+
+    Neu dn_el khong duoc reset (chi up_el=True) thi nen 6 khong duoc tinh
+    la cu pha moi, muc van la L1=97, bar van la 3 -> MUA se co level=97,
+    wait=4 thay vi level=93, wait=1.
+    """
     bars, sess, win = mk([
         (100, 110, 90, 105),      # 0 cua so
         (105, 108, 95, 100),      # 1 cua so
-        (95, 100, 94, 99),        # 2 xanh -> last_up = 99
-        (95, 96, 85, 86),         # 3 pha xuong -> dn_el = False
-        (86, 100, 85, 95),        # 4 trong range -> up_el = dn_el = True
-        (95, 96, 84, 85),         # 5 duoi rl -> arm o 99
-        (85, 102, 84, 100),       # 6 mua -> ban
+        (95, 100, 94, 97),        # 2 xanh -> last_up = 97 = L1
+        (92, 93, 84, 86),         # 3 do, pha xuong -> arm o 97, dn_el = False
+        (98, 99, 94, 95),         # 4 do, ve trong range -> reset ca hai chieu
+        (91, 94, 90, 93),         # 5 xanh, trong range -> last_up = 93 = L2
+        (93, 94, 80, 85),         # 6 do, pha xuong LAN HAI -> re-arm o L2 = 93
+        (85, 105, 84, 100),       # 7 xanh, dong 100 > 93 -> MUA
     ])
 
     got = run(bars, sess, win, min_range_bars=2)
 
     assert len(got) == 1
-    assert got[0].direction == BUY
+    s = got[0]
+    assert s.direction == BUY
+    assert s.level == 93
+    assert s.bar == 7
+    assert s.wait == 1
+    assert s.close == 100
 
 
-def test_ban_tuy_chieu():
-    """Test ban: level va close khop."""
+def test_pha_len_lan_hai_ghi_de_moc_dang_armed():
+    """F1: cu pha len LAN HAI phai GHI DE moc dang armed, khong bi khoa boi
+    up_armed cu.
+
+    nen 3 pha len lan 1 -> arm o A=100 (chua ban). nen 4 xanh dong trong
+    range -> reset up_el (khong doi up_armed, van dang cho). nen 5 do trong
+    range -> last_dn = B = 103 (moc moi, khac A). nen 6 pha len LAN HAI
+    (up_el da True) phai re-arm o B=103, bar=6. nen 7 dong 101: 101 < 103
+    (B) nen BAN ngay, level=103, wait=1.
+
+    Neu up_armed bi khoa (khong re-arm duoc vi da dang armed) thi moc van
+    la A=100 va nen 7 (101) khong xuyen A=100 -> khong co tin hieu nao ca.
+    """
     bars, sess, win = mk([
         (100, 110, 90, 105),      # 0 cua so
         (105, 108, 95, 100),      # 1 cua so
-        (105, 106, 100, 102),     # 2 do -> last_dn = 102
-        (103, 115, 102, 112),     # 3 pha len -> arm o 102
-        (112, 113, 100, 101),     # 4 ban
+        (105, 106, 99, 100),      # 2 do -> last_dn = 100 = A
+        (105, 115, 104, 112),     # 3 pha len lan 1 -> arm o A=100, up_el=False
+        (100, 106, 99, 105),      # 4 xanh, trong range -> reset up_el
+        (115, 116, 101, 103),     # 5 do, trong range -> last_dn = 103 = B
+        (105, 115, 104, 112),     # 6 pha len lan 2 -> re-arm o B=103
+        (112, 113, 100, 101),     # 7 dong 101 < 103 -> BAN, level=103, wait=1
     ])
 
     got = run(bars, sess, win, min_range_bars=2)
 
-    assert got[0].direction == SELL
-    assert got[0].level == 102
-    assert got[0].close == 101
+    assert len(got) == 1
+    s = got[0]
+    assert s.direction == SELL
+    assert s.level == 103
+    assert s.bar == 7
+    assert s.wait == 1
+    assert s.close == 101
 
 
-def test_mua_tuy_chieu():
-    """Test mua: level va close khop."""
+def test_pha_xuong_lan_hai_khi_chua_eligible_khong_rearm():
+    """F2b: cu pha xuong LAN HAI khi dn_el con False (gia chua ve trong
+    range) KHONG duoc tinh la cu pha moi -> khong re-arm, wait tinh tu cu
+    pha DAU.
+
+    nen 3 pha xuong lan 1 -> arm o 99, dn_bar=3, dn_el=False. nen 4 van o
+    NGOAI range (dong 80 < rl) va dn_el con False nen KHONG duoc re-arm du
+    dieu kien `close < rl` lai dung. nen 5 dong 100 > 99 -> MUA, level=99
+    (khong doi), wait = 5 - 3 = 2.
+
+    Neu bo dieu kien dn_el thi nen 4 re-arm lai (dn_bar=4, level van 99 vi
+    last_up khong doi) -> nen 5 se MUA voi wait = 5 - 4 = 1 thay vi 2.
+    """
     bars, sess, win = mk([
         (100, 110, 90, 105),      # 0 cua so
         (105, 108, 95, 100),      # 1 cua so
         (95, 100, 94, 99),        # 2 xanh -> last_up = 99
-        (95, 96, 85, 86),         # 3 pha xuong -> arm o 99
-        (86, 102, 85, 100),       # 4 mua
+        (92, 93, 84, 86),         # 3 do, pha xuong lan 1 -> arm o 99, dn_bar=3
+        (85, 86, 78, 80),         # 4 do, van ngoai range -> KHONG duoc re-arm
+        (80, 105, 79, 100),       # 5 xanh, dong 100 > 99 -> MUA
     ])
 
     got = run(bars, sess, win, min_range_bars=2)
 
-    assert got[0].direction == BUY
-    assert got[0].level == 99
-    assert got[0].close == 100
+    assert len(got) == 1
+    s = got[0]
+    assert s.direction == BUY
+    assert s.level == 99
+    assert s.bar == 5
+    assert s.wait == 2
+    assert s.close == 100
 
 
-def test_window_quá_nhỏ():
-    """Min range bars check."""
-    bars = [Bar(100, 110, 90, 105), Bar(105, 106, 100, 102),
-            Bar(103, 115, 102, 112), Bar(112, 113, 100, 101)]
-    session = ["S1"] * 4
-    in_window = [True, False, False, False]
+def test_nen_none_khong_gop_gi_vao_may_trang_thai():
+    """F4: `session[i] is None` phai bo qua nen HOAN TOAN — khong gom range,
+    khong lap moc, khong ban tin hieu — du du lieu nen do co du hinh dang
+    mot setup hop le.
+
+    Nen 0-6 co session=None va lap lai NGUYEN VAN hinh dang cua mot ca BAN
+    day du (cua so -> nen do lam moc -> pha len -> ve trong range -> xuyen
+    moc). Vi tat ca deu None nen ban dung phai KHONG sinh tin hieu nao tu
+    doan nay. Nen 7-11 la mot phien S2 that, lap lai chinh xac cung hinh
+    dang, va PHAI sinh dung mot tin hieu BAN.
+
+    Neu `if s is None: continue` bi doi thanh `pass`, doan None (nen 0-6)
+    se duoc xu ly y het mot phien that va tu no sinh ra mot tin hieu BAN ma
+    khong ai muon — tin hieu do se nam LAN trong danh sach ket qua cung voi
+    tin hieu that cua S2.
+    """
+    bars = [
+        Bar(100, 110, 90, 105),   # 0 None, cua so
+        Bar(105, 108, 95, 100),   # 1 None, cua so
+        Bar(100, 104, 99, 103),   # 2 None, trong range
+        Bar(106, 107, 101, 102),  # 3 None, do -> lai moc 102
+        Bar(103, 115, 102, 112),  # 4 None, pha len -> (se arm neu khong bi bo qua)
+        Bar(112, 113, 108, 109),  # 5 None, do, ve trong range
+        Bar(109, 110, 100, 101),  # 6 None, do, xuyen moc (se BAN neu khong bi bo qua)
+        Bar(100, 110, 90, 105),   # 7 S2, cua so
+        Bar(105, 108, 95, 100),   # 8 S2, cua so
+        Bar(105, 106, 100, 102),  # 9 S2, do -> lai moc 102
+        Bar(103, 115, 102, 112),  # 10 S2, pha len -> arm o 102
+        Bar(112, 113, 100, 101),  # 11 S2, do, xuyen moc -> BAN that
+    ]
+    session = [None] * 7 + ["S2"] * 5
+    in_window = [True, True, False, False, False, False, False,
+                 True, True, False, False, False]
 
     got = run(bars, session, in_window, min_range_bars=2)
 
-    assert got == []
+    assert got == [Signal(SELL, 11, 102, 101, 1, "S2")]
