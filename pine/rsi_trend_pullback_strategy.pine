@@ -202,6 +202,7 @@ var int    plotTill  = na
 var float  lastRr    = na
 var string lastDir   = na
 var float  lastEntry = na
+var int    lastWait  = na
 if sSig or bSig
     slPlot    := sSig ? sSl : bSl
     tpPlot    := sSig ? sTp : bTp
@@ -209,6 +210,7 @@ if sSig or bSig
     lastRr    := sSig ? sRr : bRr
     lastDir   := sSig ? "SELL" : "BUY"
     lastEntry := sSig ? sEntry : bEntry
+    lastWait  := sSig ? sWait : bWait
 if not na(plotTill) and bar_index > plotTill
     slPlot   := na
     tpPlot   := na
@@ -263,7 +265,7 @@ if showTable and barstate.islast
     table.cell(tbl, 1, 4, bSt == 1 ? str.tostring(bHigh, format.mintick) + " / " + str.tostring(bar_index - bXBar) : "—", text_size=size.small)
     table.cell(tbl, 0, 5, "tin hieu cuoi", text_size=size.small)
     table.cell(tbl, 1, 5, na(lastRr) ? "—" : lastDir + " " + str.tostring(lastEntry, format.mintick)
-         + "  rr " + str.tostring(lastRr, "0.00"), text_size=size.small)
+         + "  rr " + str.tostring(lastRr, "0.00") + "  cho " + str.tostring(lastWait), text_size=size.small)
 
 // ---------------------------------------------------------------- alert
 if sSig
