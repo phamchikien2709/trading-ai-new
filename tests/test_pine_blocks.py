@@ -21,10 +21,17 @@ def test_khong_co_cho_nao_troi_ngoai_danh_sach_ngoai_le():
 
 def test_guard_that_su_thay_cac_vung_dang_co():
     """Neu bo loc hong thi drift() tra ve rong VI KHONG THAY GI, va test tren
-    xanh vi ly do sai. Ghim rang cac vung that su duoc gom."""
+    xanh vi ly do sai. Ghim rang cac vung that su duoc gom.
+
+    Ghim ca RSITP: neu mot moc cua vung nay hong (doi ten, doi hoa/thuong,
+    hoac bi xoa) thi khoi do chi con gom duoc TU MOT file, va drift() bo qua
+    (len(names) < 2) roi coi nhu sach — vung troi tu do ma toan suite van
+    xanh. Day chinh la co che kill_peak da mac."""
     blocks = collect_blocks(PINE)
     assert "TIN HIEU" in blocks
     assert len(blocks["TIN HIEU"]) >= 2
+    assert "RSITP" in blocks
+    assert len(blocks["RSITP"]) == 2
 
 
 def test_ngoai_le_ghi_dich_danh_ca_hai_dong():
