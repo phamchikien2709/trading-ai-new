@@ -35,3 +35,72 @@ def test_ngoai_le_ghi_dich_danh_ca_hai_dong():
         for old, new in pairs:
             assert isinstance(old, str) and isinstance(new, str)
             assert old != new
+
+
+def test_drift_phat_hien_duoc_lech_that(tmp_path):
+    """Guard phai phat hien lech that, khong chi khang dinh sach tren du lieu
+    repo hien co."""
+    # Tao hai file gia voi cung vung nhung noi dung lech
+    aaa = tmp_path / "aaa_indicator.pine"
+    bbb = tmp_path / "bbb_strategy.pine"
+
+    aaa.write_text(
+        "// ---- KHOI THU ----\n"
+        "var int x = 10\n"
+        "var int y = 20\n"
+        "// ---- HET KHOI THU ----\n",
+        encoding="utf-8"
+    )
+    bbb.write_text(
+        "// ---- KHOI THU ----\n"
+        "var int x = 10\n"
+        "var int y = 30\n"
+        "// ---- HET KHOI THU ----\n",
+        encoding="utf-8"
+    )
+
+    # drift() voi ALLOWED rong phai tra non-empty, co ten vung, ten file, va cap dong
+    result = drift(tmp_path, {})
+    assert result, "drift() phai phat hien lech"
+    assert len(result) == 1
+    assert "THU" in result[0]
+    assert "aaa_indicator.pine" in result[0]
+    assert "bbb_strategy.pine" in result[0]
+    assert "var int y = 20" in result[0]
+    assert "var int y = 30" in result[0]
+
+    # Cung bo file, nhung ALLOWED co cap lech ay => drift() phai tra []
+    allowed_with_pair = {
+        ("THU", "aaa_indicator.pine", "bbb_strategy.pine"): [
+            ("var int y = 20", "var int y = 30"),
+        ]
+    }
+    result_allowed = drift(tmp_path, allowed_with_pair)
+    assert result_allowed == [], "drift() phai bo qua lech trong ALLOWED"
+
+
+def test_drift_phat_hien_lech_so_dong(tmp_path):
+    """Phat hien lech kieu them hang mot dong (khong phai 1-doi-1)."""
+    aaa = tmp_path / "aaa_indicator.pine"
+    bbb = tmp_path / "bbb_strategy.pine"
+
+    aaa.write_text(
+        "// ---- KHOI THU2 ----\n"
+        "line1\n"
+        "line2\n"
+        "// ---- HET KHOI THU2 ----\n",
+        encoding="utf-8"
+    )
+    bbb.write_text(
+        "// ---- KHOI THU2 ----\n"
+        "line1\n"
+        "line1b\n"
+        "line2\n"
+        "// ---- HET KHOI THU2 ----\n",
+        encoding="utf-8"
+    )
+
+    result = drift(tmp_path, {})
+    assert result, "drift() phai phat hien lech so dong"
+    assert len(result) >= 1
+    assert "THU2" in result[0]
