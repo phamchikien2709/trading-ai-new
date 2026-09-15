@@ -49,7 +49,7 @@
 //  style_linebr — khong co tran nao.
 //
 //  Kiem chung: may trang thai duoc dung lai bang Python o
-//  tests/pine_oracles/rsitp_oracle.py voi 11 test va 7 dot bien deu chet.
+//  tests/pine_oracles/rsitp_oracle.py voi 13 test va 9 dot bien deu chet.
 //  Pine KHONG compile duoc o may viet ra file nay. Phan VE va BANG khong co
 //  test, chi soat tay.
 //
@@ -163,15 +163,19 @@ plot(showLevel and sSt == 1 ? sLow : na, "Day dang theo doi",
 plot(showLevel and bSt == 1 ? bHigh : na, "Dinh dang theo doi",
      color=color.new(color.teal, 20), style=plot.style_linebr, linewidth=1)
 
-var float slPlot   = na
-var float tpPlot   = na
-var int   plotTill = na
-var float lastRr   = na
+var float  slPlot    = na
+var float  tpPlot    = na
+var int    plotTill  = na
+var float  lastRr    = na
+var string lastDir   = na
+var float  lastEntry = na
 if sSig or bSig
-    slPlot   := sSig ? sSl : bSl
-    tpPlot   := sSig ? sTp : bTp
-    plotTill := bar_index + holdBars
-    lastRr   := sSig ? sRr : bRr
+    slPlot    := sSig ? sSl : bSl
+    tpPlot    := sSig ? sTp : bTp
+    plotTill  := bar_index + holdBars
+    lastRr    := sSig ? sRr : bRr
+    lastDir   := sSig ? "SELL" : "BUY"
+    lastEntry := sSig ? sEntry : bEntry
 if not na(plotTill) and bar_index > plotTill
     slPlot   := na
     tpPlot   := na
@@ -224,8 +228,9 @@ if showTable and barstate.islast
     table.cell(tbl, 1, 3, f_st(bSt), text_size=size.small)
     table.cell(tbl, 0, 4, "  dinh / cho", text_size=size.small)
     table.cell(tbl, 1, 4, bSt == 1 ? str.tostring(bHigh, format.mintick) + " / " + str.tostring(bar_index - bXBar) : "—", text_size=size.small)
-    table.cell(tbl, 0, 5, "rr tin hieu cuoi", text_size=size.small)
-    table.cell(tbl, 1, 5, na(lastRr) ? "—" : str.tostring(lastRr, "0.00"), text_size=size.small)
+    table.cell(tbl, 0, 5, "tin hieu cuoi", text_size=size.small)
+    table.cell(tbl, 1, 5, na(lastRr) ? "—" : lastDir + " " + str.tostring(lastEntry, format.mintick)
+         + "  rr " + str.tostring(lastRr, "0.00"), text_size=size.small)
 
 // ---------------------------------------------------------------- alert
 if sSig
