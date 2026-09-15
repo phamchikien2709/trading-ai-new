@@ -1,0 +1,264 @@
+//@version=6
+// =============================================================================
+//  NAS Open Range Fade — indicator danh dau (khong dat lenh)
+//
+//  Hai phien moi ngay mo luc 07:00 va 19:00 gio UTC+7. Gio dau tien cua moi
+//  phien tao mot range. Khi gia dong cua vuot ra khoi range roi QUAY LAI xuyen
+//  qua moc cua cay nen nguoc chieu cuoi cung truoc cu pha, do la dau hieu cu
+//  pha da hong.
+//
+//  Day la setup DAO CHIEU, khong phai setup di theo cu pha: pha len ma hong thi
+//  tin hieu la BAN.
+//
+//  SAU BUOC TRONG MOT NEN, DUNG THU TU NAY — day la cho chiu luc:
+//    1. gom range / chot range
+//    2. kiem tin hieu        -> ban, disarm
+//    3. cap nhat eligible    (chi khi nen nay dong TRONG range)
+//    4. kiem pha LEN         -> arm
+//    5. kiem pha XUONG       -> arm
+//    6. cap nhat lastDownClose / lastUpClose TU NEN NAY
+//
+//  Buoc 6 PHAI cuoi cung. Neu no chay truoc buoc 4 thi mot nen pha ma ban than
+//  no la nen do se tu lay close cua chinh minh lam moc — pattern van chay, van
+//  ve, va sai am tham.
+//
+//  CU PHA LA MOT SU KIEN, KHONG PHAI MOT MUC: phai co nen dong cua TRONG range
+//  roi moi tinh cu pha tiep theo (bien upEligible). Neu chi so muc thi moi nen
+//  o tren bien deu la "pha" va moc bi ghi de lien tuc — moc duoi theo gia thay
+//  vi dung yen.
+//
+//  KHONG DUNG request.security DE LAY CAY H1. Nen H1 cua TradingView neo theo
+//  phien cua san, khong neo theo 07:00 UTC+7, nen "cay H1 mo luc 07:00" rat co
+//  the khong ton tai nhu mot nen H1 — no roi vao giua hai nen. Khi do
+//  request.security van tra ve mot gia tri, chi la gia tri cua mot cay khac:
+//  khong loi, khong canh bao, chi la mot range sai. Range o day duoc gom truc
+//  tiep tu nen 1m.
+//
+//  CHI CHAY TREN KHUNG M1. Tren khung khac, file ve mot nhan canh bao va khong
+//  sinh tin hieu nao. Im lang chay sai tren khung khac la che do hong te hon
+//  nhieu so voi tu choi chay.
+//
+//  MOC 07:00 VA 19:00 TROI SO VOI PHIEN MY MOI NAM HAI LAN: UTC+7 khong co DST
+//  con My thi co. 19:00 UTC+7 la 08:00 ET mua he nhung 07:00 ET mua dong. Cung
+//  mot setup do hai thu khac nhau tuy mua — khi doc ket qua gop nhieu nam thi
+//  day la bien gay nhieu.
+//
+//  BOX BI PINE CHAN CUNG 500. Hai box moi ngay tuc khoang 250 phien, nua nam
+//  lich su; cu hon thi box lang le bien mat khoi chart. Tran nay CHI anh huong
+//  phan VE: may trang thai doc rangeHigh/rangeLow la bien float, khong doc doi
+//  tuong box. Mui ten tin hieu dung plotshape — khong co tran.
+//
+//  Kiem chung: may trang thai duoc dung lai bang Python o
+//  tests/pine_oracles/orfade_oracle.py voi 13 test va 6 dot bien deu chet.
+//  Pine KHONG compile duoc o may viet ra file nay. Phan VE va BANG khong co
+//  test, chi soat tay.
+// =============================================================================
+indicator("NAS Open Range Fade", overlay=true,
+     max_boxes_count=500, max_labels_count=500)
+
+// ---------------------------------------------------------------- inputs
+grpSess      = "Phien"
+tzName       = input.string("Asia/Bangkok", "Mui gio", group=grpSess)
+sess1Hour    = input.int(7,  "Gio mo phien 1", minval=0, maxval=23, group=grpSess)
+sess2Hour    = input.int(19, "Gio mo phien 2", minval=0, maxval=23, group=grpSess)
+rangeMinutes = input.int(60, "Do dai cua so gom range (phut)", minval=1, group=grpSess)
+minRangeBars = input.int(30, "So nen 1m toi thieu trong cua so", minval=1, group=grpSess)
+
+grpDir     = "Chieu"
+enableUp   = input.bool(true, "Bat chieu BAN (pha len hong)", group=grpDir)
+enableDown = input.bool(true, "Bat chieu MUA (pha xuong hong)", group=grpDir)
+
+grpShow     = "Hien thi"
+showBox     = input.bool(true, "Box range", group=grpShow)
+showLevel   = input.bool(true, "Moc dang cho", group=grpShow)
+showSignals = input.bool(true, "Mui ten tin hieu", group=grpShow)
+showTable   = input.bool(true, "Bang trang thai", group=grpShow)
+boxTransp   = input.int(85, "Do trong cua box", minval=0, maxval=100, group=grpShow)
+
+// ---------------------------------------------------------------- phien
+bool isM1 = timeframe.period == "1"
+
+int mins = hour(time, tzName) * 60 + minute(time, tzName)
+int win1 = sess1Hour * 60
+int win2 = sess2Hour * 60
+
+bool inWin1 = mins >= win1 and mins < win1 + rangeMinutes
+bool inWin2 = mins >= win2 and mins < win2 + rangeMinutes
+bool inWin  = inWin1 or inWin2
+
+// Phien moi = vua BUOC VAO mot cua so gom ma nen truoc chua o trong do.
+// nz(..., false) can thiet: tren nen dau chart `inWin1[1]` la na, va `na` trong
+// ngu canh boolean lam ca bieu thuc thanh falsy — phien dau tien se bi bo qua.
+bool newSess = (inWin1 and not nz(inWin1[1], false))
+     or (inWin2 and not nz(inWin2[1], false))
+
+// ---------------------------------------------------------------- trang thai
+var string sessName      = na
+var int    winStartBar   = na
+var float  rangeHigh     = na
+var float  rangeLow      = na
+var int    nWin          = 0
+var bool   finalized     = false
+var bool   rangeOk       = false
+var bool   upEligible    = false
+var bool   dnEligible    = false
+var bool   upArmed       = false
+var bool   dnArmed       = false
+var float  upLevel       = na
+var float  dnLevel       = na
+var int    upBar         = na
+var int    dnBar         = na
+var float  lastDownClose = na
+var float  lastUpClose   = na
+var box    rangeBox      = na
+
+var string lastSigDir   = na
+var float  lastSigLevel = na
+var float  lastSigClose = na
+var int    lastSigWait  = na
+
+bool  upSig    = false
+bool  dnSig    = false
+float sigLevel = na
+int   sigWait  = na
+
+// ---------------------------------------------------------------- may trang thai
+// Ca khoi gac bang barstate.isconfirmed: `nWin := nWin + 1` KHONG idempotent,
+// nen chay lai trong cung mot nen se dem sai so nen cua cua so.
+if isM1 and barstate.isconfirmed
+
+    // 0. phien moi thi xoa sach
+    if newSess
+        sessName      := inWin1 ? str.tostring(sess1Hour) + ":00" : str.tostring(sess2Hour) + ":00"
+        winStartBar   := bar_index
+        rangeHigh     := na
+        rangeLow      := na
+        nWin          := 0
+        finalized     := false
+        rangeOk       := false
+        upEligible    := false
+        dnEligible    := false
+        upArmed       := false
+        dnArmed       := false
+        upLevel       := na
+        dnLevel       := na
+        upBar         := na
+        dnBar         := na
+        lastDownClose := na
+        lastUpClose   := na
+        rangeBox      := na
+
+    // 1a. gom range
+    if inWin
+        rangeHigh := na(rangeHigh) ? high : math.max(rangeHigh, high)
+        rangeLow  := na(rangeLow)  ? low  : math.min(rangeLow,  low)
+        nWin      := nWin + 1
+
+    // 1b. chot range — nen dau tien ngoai cua so
+    if not inWin and not finalized
+        finalized     := true
+        rangeOk       := nWin >= minRangeBars
+        upEligible    := rangeOk
+        dnEligible    := rangeOk
+        lastDownClose := na
+        lastUpClose   := na
+        if showBox and rangeOk
+            rangeBox := box.new(winStartBar, rangeHigh, bar_index, rangeLow,
+                 border_color=color.new(color.gray, 20),
+                 bgcolor=color.new(color.gray, boxTransp))
+
+    if not inWin and rangeOk
+        // 2. tin hieu
+        if upArmed and close < upLevel
+            if enableUp
+                upSig    := true
+                sigLevel := upLevel
+                sigWait  := bar_index - upBar
+            upArmed := false
+        if dnArmed and close > dnLevel
+            if enableDown
+                dnSig    := true
+                sigLevel := dnLevel
+                sigWait  := bar_index - dnBar
+            dnArmed := false
+
+        // 3. eligible — CHI khi dong TRONG range
+        if close >= rangeLow and close <= rangeHigh
+            upEligible := true
+            dnEligible := true
+
+        // 4. pha LEN
+        if close > rangeHigh and upEligible and not na(lastDownClose) and lastDownClose < rangeHigh
+            upLevel    := lastDownClose
+            upBar      := bar_index
+            upArmed    := true
+            upEligible := false
+
+        // 5. pha XUONG
+        if close < rangeLow and dnEligible and not na(lastUpClose) and lastUpClose > rangeLow
+            dnLevel    := lastUpClose
+            dnBar      := bar_index
+            dnArmed    := true
+            dnEligible := false
+
+        // 6. cap nhat moc TU NEN NAY — PHAI CUOI CUNG
+        if close < open
+            lastDownClose := close
+        else if close > open
+            lastUpClose := close
+
+    // noi dai box sang phai suot phien
+    if showBox and not na(rangeBox)
+        box.set_right(rangeBox, bar_index)
+
+    if upSig or dnSig
+        lastSigDir   := upSig ? "BAN" : "MUA"
+        lastSigLevel := sigLevel
+        lastSigClose := close
+        lastSigWait  := sigWait
+
+// ---------------------------------------------------------------- ve
+plot(showLevel and upArmed ? upLevel : na, "Moc chieu BAN",
+     color=color.new(color.red, 0), style=plot.style_linebr, linewidth=1)
+plot(showLevel and dnArmed ? dnLevel : na, "Moc chieu MUA",
+     color=color.new(color.teal, 0), style=plot.style_linebr, linewidth=1)
+
+plotshape(showSignals and upSig, title="BAN", style=shape.triangledown,
+     location=location.abovebar, color=color.new(color.red, 0),
+     size=size.small, text="S")
+plotshape(showSignals and dnSig, title="MUA", style=shape.triangleup,
+     location=location.belowbar, color=color.new(color.teal, 0),
+     size=size.small, text="B")
+
+if barstate.islast and not isM1
+    label.new(bar_index, high,
+         "NAS Open Range Fade chi chay tren khung M1.\nKhung hien tai: "
+         + timeframe.period + " — khong sinh tin hieu nao.",
+         style=label.style_label_down, color=color.new(color.orange, 10),
+         textcolor=color.white, size=size.normal)
+
+// ---------------------------------------------------------------- bang
+f_armTxt(armed, lvl, brk) =>
+    armed ? "ARMED @ " + str.tostring(lvl, format.mintick)
+         + "  (" + str.tostring(bar_index - brk) + " nen)" : "READY"
+
+var table tbl = na
+if showTable and barstate.islast and isM1
+    if na(tbl)
+        tbl := table.new(position.top_right, 2, 5, border_width=1)
+    table.cell(tbl, 0, 0, "phien", text_size=size.small)
+    table.cell(tbl, 1, 0, na(sessName) ? "—" : sessName + "  (" + str.tostring(nWin) + " nen)", text_size=size.small)
+    table.cell(tbl, 0, 1, "range", text_size=size.small)
+    table.cell(tbl, 1, 1, rangeOk ? str.tostring(rangeHigh, format.mintick) + " / " + str.tostring(rangeLow, format.mintick) : "—", text_size=size.small)
+    table.cell(tbl, 0, 2, "chieu BAN", text_size=size.small)
+    table.cell(tbl, 1, 2, f_armTxt(upArmed, upLevel, upBar), text_size=size.small)
+    table.cell(tbl, 0, 3, "chieu MUA", text_size=size.small)
+    table.cell(tbl, 1, 3, f_armTxt(dnArmed, dnLevel, dnBar), text_size=size.small)
+    table.cell(tbl, 0, 4, "tin hieu cuoi", text_size=size.small)
+    table.cell(tbl, 1, 4, na(lastSigDir) ? "—" : lastSigDir + " " + str.tostring(lastSigClose, format.mintick) + "  cho " + str.tostring(lastSigWait), text_size=size.small)
+
+// ---------------------------------------------------------------- alert
+if upSig
+    alert('{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"SELL","setup":"ORFADE"' + ',"level":' + str.tostring(sigLevel, "0.#####") + ',"range_high":' + str.tostring(rangeHigh, "0.#####") + ',"range_low":' + str.tostring(rangeLow, "0.#####") + ',"close":' + str.tostring(close, "0.#####") + ',"session":"' + sessName + '","wait":' + str.tostring(sigWait) + '}', alert.freq_once_per_bar_close)
+if dnSig
+    alert('{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BUY","setup":"ORFADE"' + ',"level":' + str.tostring(sigLevel, "0.#####") + ',"range_high":' + str.tostring(rangeHigh, "0.#####") + ',"range_low":' + str.tostring(rangeLow, "0.#####") + ',"close":' + str.tostring(close, "0.#####") + ',"session":"' + sessName + '","wait":' + str.tostring(sigWait) + '}', alert.freq_once_per_bar_close)
