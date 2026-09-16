@@ -1,0 +1,241 @@
+//@version=6
+// =============================================================================
+//  RSI Trend Pullback — indicator danh dau (khong dat lenh)
+//
+//  Setup THEO XU HUONG, nguoc vai voi rsi_failure_swing (bat dinh day). O kia
+//  mot cu qua ban roi phan ki la tin hieu DAO CHIEU; o day mot cu qua ban la
+//  bang chung xu huong giam dang manh, va cu hoi ve 50 la cho ban tiep.
+//
+//  May trang thai, chieu BAN (MUA soi guong qua hiLevel):
+//    IDLE     rsi < loLevel                        -> SEEKING, dat sLow = low
+//    SEEKING  moi nen: sLow = min(sLow, low)
+//             rsi > midLevel, nen da dong          -> TIN HIEU, ve IDLE
+//
+//  KHONG co dieu kien huy, KHONG co han nen. Lua chon co chu y: do phan phoi
+//  thoi gian cho that truoc, roi moi quyet co can han hay khong. He qua: rr
+//  KHONG co chan tren, nen phai doc rr CUNG VOI so nen cho — ca hai co trong
+//  bang, trong nhan va trong alert.
+//
+//  THU TU BA BUOC TRONG MOT NEN LA CHO CHIU LUC:
+//    1. noi cuc tri  2. kiem tin hieu  3. mo pha moi
+//  Buoc 1 truoc buoc 2 vi day lay "cho toi nen entry", tuc low cua chinh nen
+//  vao lenh phai duoc tinh vao. Dao lai thi TP lech mot nen va sai am tham.
+//
+//  SO MUC, KHONG BAT CAT: luat la `rsi > midLevel` chu khong phai
+//  `rsi[1] <= midLevel and rsi > midLevel`. Hai ly do — no dung chu de bai
+//  ("sell tai cay nen co rsi > 50"), va no khong vo khi lo mot nen: tin hieu
+//  bi gac bang barstate.isconfirmed, nen voi bat cat mot lan lo tick dong nen
+//  se lam setup KET o SEEKING vinh vien. Voi so muc no chi ban muon mot nen.
+//  So muc khong sinh tin hieu thua vi SEEKING chi ton tai sau khi da thay
+//  rsi < loLevel.
+//
+//  Gia (chieu BAN):
+//    entry = close nen xac nhan
+//    SL    = entry + slAtrMult * ATR
+//    TP    = sLow  - tpAtrMult * ATR
+//    rr    = (entry - TP) / (SL - entry)
+//  sLow <= low nen entry <= close, nen TP luon duoi entry va SL luon tren
+//  entry. Khong can guard. Chi chan luc rsi/atr con na, va chan mau so cua rr
+//  bang 0 (atr = 0) — khong do duoc rui ro thi khong danh dau.
+//
+//  Pane: file nay nam o PANE GIA (overlay=true) va KHONG ve RSI. Co chu y, va
+//  khac rsi_failure_swing: file kia dung force_overlay (14 cho) de day doi
+//  tuong sang pane gia, ma force_overlay chua bao gio compile duoc o may nay.
+//  Khong co ly do gi de cuoc file moi vao cung mot thu chua kiem chung. Muon
+//  nhin RSI thi bat indicator RSI dung san; bang trang thai van in RSI hien tai.
+//
+//  Phan ve KHONG dung mot doi tuong line nao: line.new bi chan cung 500 va khi
+//  tran thi cai cu nhat LANG LE bien mat (kill_peak da mac). Dung plot voi
+//  style_linebr — khong co tran nao.
+//
+//  Kiem chung: may trang thai duoc dung lai bang Python o
+//  tests/pine_oracles/rsitp_oracle.py voi 13 test va 9 dot bien deu chet.
+//  Pine KHONG compile duoc o may viet ra file nay. Phan VE va BANG khong co
+//  test, chi soat tay.
+//
+//  Companion: pine/rsi_trend_pullback_strategy.pine chay cung khoi tin hieu
+//  voi lenh; tests/test_pine_blocks.py canh hai ban khong troi khoi nhau.
+// =============================================================================
+indicator("RSI Trend Pullback", overlay=true, max_labels_count=500)
+
+// ---------------------------------------------------------------- inputs
+grpRsi   = "RSI"
+rsiLen   = input.int(14, "RSI length", minval=2, group=grpRsi)
+loLevel  = input.float(25, "Muc thung xuong (mo pha BAN)", group=grpRsi)
+midLevel = input.float(50, "Muc xac nhan", group=grpRsi)
+hiLevel  = input.float(75, "Muc vuot len (mo pha MUA)", group=grpRsi)
+
+grpRisk   = "Rui ro"
+atrLen    = input.int(14, "ATR length", minval=1, group=grpRisk)
+slAtrMult = input.float(3.0, "SL (x ATR)", minval=0.1, step=0.5, group=grpRisk)
+tpAtrMult = input.float(1.0, "TP qua cuc tri (x ATR)", minval=0, step=0.5, group=grpRisk)
+
+grpDir     = "Chieu"
+enableSell = input.bool(true, "Enable SELL", group=grpDir)
+enableBuy  = input.bool(true, "Enable BUY", group=grpDir)
+
+grpShow    = "Hien thi"
+showTint   = input.bool(true, "To nen luc dang cho", group=grpShow)
+showLevel  = input.bool(true, "Cuc tri dang theo doi", group=grpShow)
+showSig    = input.bool(true, "Mui ten tin hieu", group=grpShow)
+showLabels = input.bool(true, "Nhan chi tiet", group=grpShow)
+showTable  = input.bool(true, "Bang trang thai", group=grpShow)
+holdBars   = input.int(20, "Giu SL/TP bao nhieu nen", minval=1, group=grpShow)
+
+// ---- KHOI RSITP ----
+// ta.* phai o top level: chung giu state noi bo, goi trong if la sai am tham
+float rsi = ta.rsi(close, rsiLen)
+float atr = ta.atr(atrLen)
+bool  ok  = not na(rsi) and not na(atr)
+
+// trang thai: 0 IDLE, 1 SEEKING
+var int   sSt   = 0
+var float sLow  = na
+var int   sXBar = na
+var int   bSt   = 0
+var float bHigh = na
+var int   bXBar = na
+
+bool  sSig   = false
+float sEntry = na
+float sSl    = na
+float sTp    = na
+float sRr    = na
+int   sWait  = na
+bool  bSig   = false
+float bEntry = na
+float bSl    = na
+float bTp    = na
+float bRr    = na
+int   bWait  = na
+
+// ---- chieu BAN ----
+// 1. noi cuc tri — PHAI truoc buoc 2
+if sSt == 1 and low < sLow
+    sLow := low
+
+// 2. tin hieu — PHAI truoc buoc 3
+if sSt == 1 and ok and rsi > midLevel and barstate.isconfirmed
+    float sRisk = slAtrMult * atr
+    if enableSell and sRisk > 0
+        sSig   := true
+        sEntry := close
+        sSl    := close + sRisk
+        sTp    := sLow - tpAtrMult * atr
+        sRr    := (sEntry - sTp) / sRisk
+        sWait  := bar_index - sXBar
+    sSt := 0
+
+// 3. mo pha
+if sSt == 0 and ok and rsi < loLevel
+    sSt   := 1
+    sLow  := low
+    sXBar := bar_index
+
+// ---- chieu MUA (guong) ----
+if bSt == 1 and high > bHigh
+    bHigh := high
+
+if bSt == 1 and ok and rsi < midLevel and barstate.isconfirmed
+    float bRisk = slAtrMult * atr
+    if enableBuy and bRisk > 0
+        bSig   := true
+        bEntry := close
+        bSl    := close - bRisk
+        bTp    := bHigh + tpAtrMult * atr
+        bRr    := (bTp - bEntry) / bRisk
+        bWait  := bar_index - bXBar
+    bSt := 0
+
+if bSt == 0 and ok and rsi > hiLevel
+    bSt   := 1
+    bHigh := high
+    bXBar := bar_index
+// ---- HET KHOI RSITP ----
+
+// ---------------------------------------------------------------- ve
+color sTint = color.new(color.red, 92)
+color bTint = color.new(color.teal, 92)
+bgcolor(showTint ? (sSt == 1 ? sTint : bSt == 1 ? bTint : na) : na, title="Dang cho")
+
+plot(showLevel and sSt == 1 ? sLow : na, "Day dang theo doi",
+     color=color.new(color.red, 20), style=plot.style_linebr, linewidth=1)
+plot(showLevel and bSt == 1 ? bHigh : na, "Dinh dang theo doi",
+     color=color.new(color.teal, 20), style=plot.style_linebr, linewidth=1)
+
+var float  slPlot    = na
+var float  tpPlot    = na
+var int    plotTill  = na
+var float  lastRr    = na
+var string lastDir   = na
+var float  lastEntry = na
+var int    lastWait  = na
+if sSig or bSig
+    slPlot    := sSig ? sSl : bSl
+    tpPlot    := sSig ? sTp : bTp
+    plotTill  := bar_index + holdBars
+    lastRr    := sSig ? sRr : bRr
+    lastDir   := sSig ? "SELL" : "BUY"
+    lastEntry := sSig ? sEntry : bEntry
+    lastWait  := sSig ? sWait : bWait
+if not na(plotTill) and bar_index > plotTill
+    slPlot   := na
+    tpPlot   := na
+    plotTill := na
+
+plot(slPlot, "SL", color=color.new(color.red, 0),
+     style=plot.style_linebr, linewidth=1)
+plot(tpPlot, "TP", color=color.new(color.teal, 0),
+     style=plot.style_linebr, linewidth=1)
+
+plotshape(showSig and sSig, title="SELL", style=shape.triangledown,
+     location=location.abovebar, color=color.new(color.red, 0),
+     size=size.small, text="S")
+plotshape(showSig and bSig, title="BUY", style=shape.triangleup,
+     location=location.belowbar, color=color.new(color.teal, 0),
+     size=size.small, text="B")
+
+if showLabels and sSig
+    label.new(bar_index, high, "SELL  rr " + str.tostring(sRr, "0.00")
+         + "\nentry " + str.tostring(sEntry, format.mintick)
+         + "\nSL " + str.tostring(sSl, format.mintick)
+         + "\nTP " + str.tostring(sTp, format.mintick)
+         + "\ncho " + str.tostring(sWait) + " nen",
+         style=label.style_label_down, color=color.new(color.red, 20),
+         textcolor=color.white, size=size.small)
+if showLabels and bSig
+    label.new(bar_index, low, "BUY  rr " + str.tostring(bRr, "0.00")
+         + "\nentry " + str.tostring(bEntry, format.mintick)
+         + "\nSL " + str.tostring(bSl, format.mintick)
+         + "\nTP " + str.tostring(bTp, format.mintick)
+         + "\ncho " + str.tostring(bWait) + " nen",
+         style=label.style_label_up, color=color.new(color.teal, 20),
+         textcolor=color.white, size=size.small)
+
+// ---------------------------------------------------------------- bang
+f_st(s) =>
+    s == 1 ? "dang cho" : "—"
+
+var table tbl = na
+if showTable and barstate.islast
+    if na(tbl)
+        tbl := table.new(position.top_right, 2, 6, border_width=1)
+    table.cell(tbl, 0, 0, "RSI(" + str.tostring(rsiLen) + ") / ATR", text_size=size.small)
+    table.cell(tbl, 1, 0, str.tostring(rsi, "0.#") + " / " + str.tostring(atr, format.mintick), text_size=size.small)
+    table.cell(tbl, 0, 1, "BAN", text_size=size.small)
+    table.cell(tbl, 1, 1, f_st(sSt), text_size=size.small)
+    table.cell(tbl, 0, 2, "  day / cho", text_size=size.small)
+    table.cell(tbl, 1, 2, sSt == 1 ? str.tostring(sLow, format.mintick) + " / " + str.tostring(bar_index - sXBar) : "—", text_size=size.small)
+    table.cell(tbl, 0, 3, "MUA", text_size=size.small)
+    table.cell(tbl, 1, 3, f_st(bSt), text_size=size.small)
+    table.cell(tbl, 0, 4, "  dinh / cho", text_size=size.small)
+    table.cell(tbl, 1, 4, bSt == 1 ? str.tostring(bHigh, format.mintick) + " / " + str.tostring(bar_index - bXBar) : "—", text_size=size.small)
+    table.cell(tbl, 0, 5, "tin hieu cuoi", text_size=size.small)
+    table.cell(tbl, 1, 5, na(lastRr) ? "—" : lastDir + " " + str.tostring(lastEntry, format.mintick)
+         + "  rr " + str.tostring(lastRr, "0.00") + "  cho " + str.tostring(lastWait), text_size=size.small)
+
+// ---------------------------------------------------------------- alert
+if sSig
+    alert('{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"SELL","setup":"RSITP"' + ',"entry":' + str.tostring(sEntry, "0.#####") + ',"sl":' + str.tostring(sSl, "0.#####") + ',"tp":' + str.tostring(sTp, "0.#####") + ',"rr":' + str.tostring(sRr, "0.###") + ',"wait":' + str.tostring(sWait) + '}', alert.freq_once_per_bar_close)
+if bSig
+    alert('{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BUY","setup":"RSITP"' + ',"entry":' + str.tostring(bEntry, "0.#####") + ',"sl":' + str.tostring(bSl, "0.#####") + ',"tp":' + str.tostring(bTp, "0.#####") + ',"rr":' + str.tostring(bRr, "0.###") + ',"wait":' + str.tostring(bWait) + '}', alert.freq_once_per_bar_close)

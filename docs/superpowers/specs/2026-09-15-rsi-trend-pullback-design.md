@@ -61,7 +61,9 @@ Luật dùng **so mức** (`rsi > midLevel`) chứ không dùng bắt cắt
    (§3). Nếu dùng bắt cắt và không có lần script chạy nào rơi đúng tick đóng
    nến, thì sang nến sau `rsi[1] <= 50` đã sai và setup **kẹt ở SEEKING vĩnh
    viễn**, chỉ thoát khi RSI tụt lại dưới 50 rồi lên lần nữa — tức một lệnh
-   khác hẳn. Với so mức, nó chỉ bắn muộn một nến.
+   khác hẳn. Với so mức, nó chỉ bắn muộn một nến — **trong pha cô lập, một
+   chiều**; ca hai chiều cùng dính vì cùng một nến lỡ tick đóng thì trễ có thể
+   nhiều hơn một nến, xem §3 và §11 mục 6.
 
 So mức không sinh tín hiệu thừa: trạng thái `SEEKING` chỉ tồn tại sau khi đã
 thấy RSI < 25, nên nến xác nhận đầu tiên có RSI > 50 **chính là** cú vượt mốc.
@@ -112,10 +114,16 @@ IDLE, bước 3 chạy ngay sau đó trên cùng nến sẽ thấy `rsi > 50` n�
 bán mới. Đúng. Chiều ngược lại cũng vậy: RSI rơi 60 → 20 trong một nến thì bước
 2 không làm gì (đang IDLE) còn bước 3 mở pha bán.
 
-**Hai chiều không bao giờ cùng SEEKING.** Pha bán sống khi RSI chưa vượt 50;
-pha mua sống khi RSI chưa thủng 50. Nếu RSI nhảy 24 → 80 trong một nến thì khối
-BÁN chạy trước (bắn tín hiệu, về IDLE), rồi khối MUA mở pha — cùng một nến,
-theo thứ tự, không giẫm nhau.
+**Hai chiều không bao giờ cùng SEEKING — với điều kiện mỗi nến chỉ được đánh
+giá đúng một lần, lúc đóng.** Pha bán sống khi RSI chưa vượt 50; pha mua sống
+khi RSI chưa thủng 50. Nếu RSI nhảy 24 → 80 trong một nến thì khối BÁN chạy
+trước (bắn tín hiệu, về IDLE), rồi khối MUA mở pha — cùng một nến, theo thứ
+tự, không giẫm nhau. Điều kiện đó đúng trên nến lịch sử và trên `strategy`
+mặc định (§3), nhưng **không đúng trên `indicator` chạy live nếu lỡ một lần
+tick đóng nến**: khi đó có thể có nhiều lần chạy trong cùng một nến với
+`barstate.isconfirmed` chưa từng true, rồi true muộn ở nến sau, và hai chiều
+có thể cùng SEEKING một lúc. Xem §11 mục 6 để có số đo cụ thể và giải thích
+tại sao khẳng định "không bao giờ" ở đây chỉ đúng có điều kiện.
 
 ### 2.6 Giá
 
@@ -179,6 +187,16 @@ Nhờ luật so mức (§2.2), tín hiệu sẽ bắn ở nến kế tiếp nế
 không mất hẳn; nhưng entry khi đó là giá đóng của nến sau. Tải lại chart sẽ vẽ
 lại mũi tên trên nến lịch sử, còn `alert()` thì **không bao giờ bắn lại**.
 Vì vậy: **thấy mũi tên trên lịch sử không phải bằng chứng alert đã bắn.**
+
+**"Chỉ bắn muộn một nến" đúng cho MỘT lần lỡ tick đóng cô lập, không đúng cho
+mọi ca.** Khẳng định trên ngầm giả định pha đang chờ vẫn là pha DUY NHẤT đang
+sống. Nếu đúng một nến lỡ tick đóng lại đồng thời làm cả hai chiều rơi vào
+SEEKING cùng lúc (§2.5, §11 mục 6), thì phía không bắn được ngay không chỉ trễ
+một nến — nó có thể sống thêm hàng chục nến, và khi bắn thì entry là giá đóng
+của một nến rất xa nến lẽ ra phải bắn, không phải "nến kế tiếp" như câu trên
+mô tả. Đây là hệ quả trực tiếp của việc bước 2 (kiểm tín hiệu) không được gác
+bằng `barstate.isconfirmed` trong khi bước 3 (mở pha mới) không gác — số đo cụ
+thể ở §11 mục 6.
 
 ---
 
@@ -385,3 +403,71 @@ mất trên chart backtest.
 5. **Nguồn dữ liệu backtest.** Bản strategy chạy trên TradingView với dữ liệu
    của broker mà chart đang dùng; con số sẽ không khớp tuyệt đối với bất kỳ
    backtest Python nào chạy trên XAUUSDc của Exness.
+
+6. **Một nến lỡ tick đóng làm hai chiều dính vào nhau — và §2.5/§3 nói sai khi
+   giả định điều đó không xảy ra.** Bước 2 (kiểm tín hiệu) gác bằng
+   `barstate.isconfirmed`; bước 3 (mở pha mới) **không** gác. Bình thường điều
+   này vô hại vì cả ba bước chỉ chạy hiệu lực một lần mỗi nến (lúc đóng). Nhưng
+   nếu một nến bị lỡ đúng tick đóng — feed chậm, script bị treo rồi resume,
+   người dùng mở chart giữa chừng — thì trên nến đó bước 3 vẫn có thể mở một
+   pha MỚI ở chiều ngược lại trong khi pha CŨ chưa kịp bắn ở bước 2 (vì
+   `isconfirmed` chưa true), và bước 2 của pha cũ chỉ bắn được ở một nến sau
+   đó, muộn hơn một nến rất nhiều. Kết quả: **hai chiều cùng SEEKING một lúc**
+   — đúng điều §2.5 khẳng định "không bao giờ" xảy ra — và pha bị trễ **không**
+   chỉ bắn muộn một nến như §3 mô tả cho ca lỡ tick đơn lẻ.
+
+   Số đo thật từ mô phỏng (không phải suy diễn): dựng một chuỗi nến trong đó
+   một lần lỡ tick đóng xảy ra đúng lúc RSI đang giằng co quanh cả hai mốc.
+   Kết quả — nến 5 có **cả** `sSt == 1` **lẫn** `bSt == 1` cùng lúc; tín hiệu
+   MUA ở nến 6 bắn bình thường trong khi pha BÁN (mở từ trước) vẫn còn sống;
+   và pha BÁN đó không bắn muộn một nến mà sống thêm **19 nến nữa**, cuối cùng
+   bắn ở nến 24 với entry **1880 thay vì 2010** như đáng lẽ phải có nếu không
+   lỡ tick — lệch khoảng **32×ATR** — với `wait` in ra là **23** thay vì **4**.
+
+   Chỉ xảy ra ở bản **live**. Bản `indicator` tính lại mỗi tick nên dễ dính lỗi
+   này nhất; bản `strategy` mặc định `calc_on_every_tick=false` (chỉ tính lại
+   lúc đóng nến) nên gần như miễn nhiễm — nhưng "gần như" không phải "không
+   bao giờ", vì người dùng vẫn có thể bật `calc_on_every_tick=true` theo ý
+   riêng. **Không backtest nào lộ ra chuyện này**, vì trên nến lịch sử
+   `barstate.isconfirmed` luôn đúng ngay lần chạy đầu tiên — đây là một rủi ro
+   thuần túy của môi trường live, tách biệt hoàn toàn khỏi mọi con số backtest
+   đã có.
+
+7. **`process_orders_on_close=false` nghĩa là lệnh khớp ở `open` của nến SAU,
+   không phải `close` của nến entry như §2.6 định nghĩa.** Mọi con số trong
+   khối tín hiệu — `sSl`, `sTp` (giá tuyệt đối), và `sQty` (chia cho
+   `sSlDist`) — đều treo vào `close` của đúng nến entry đó. Nếu giá gap qua
+   phiên (mở cửa lại, tin tức, cuối tuần) thì nến sau có thể mở **đã nằm ngoài
+   mức stop**: lệnh short khớp ở giá xấu hơn `sSl`, `strategy.exit` cắt ngay
+   lập tức ở giá khớp đó, và khoản lỗ thực tế **lớn hơn** `riskPct` đã định —
+   **không có trần nào chặn phần vượt** vì stop đã bị gap nhảy qua chứ không
+   phải bị chạm đúng giá. Chiều ngược lại: nếu gap nhảy qua TP thì lệnh "thắng"
+   ngay từ giá mở cửa, một khoản lời không phản ánh setup nào đã được đo —
+   thuần túy may mắn của gap. Trong **mọi** ca, con số `rr` in ra trên bảng,
+   nhãn và alert là `rr` **lý thuyết** tính từ `sSl`/`sTp`, không phải `rr`
+   **thực hiện** từ giá khớp thật — trong khi §11 mục 1 nói `rr` là thứ đầu
+   tiên phải nhìn khi đọc kết quả. Đây là **quy ước dùng chung toàn repo**
+   (7/7 file strategy hiện có đều dùng `process_orders_on_close=false`),
+   **không phải hồi quy riêng của file này**, nhưng chưa từng được ghi thành
+   chữ — giờ ghi lại ở đây để không ai đọc `rr` của bất kỳ strategy nào trong
+   repo mà quên mất khoảng cách giữa lý thuyết và giá khớp thật.
+
+8. **Indicator phát mọi tín hiệu; strategy chỉ vào lệnh khi đang flat
+   (`strategy.position_size == 0`) — và tập tín hiệu bị strategy bỏ qua
+   KHÔNG NGẪU NHIÊN.** Một tín hiệu đến khi đang có lệnh mở sẽ bị strategy bỏ
+   qua hoàn toàn (không log, không đối chiếu), nhưng vẫn được indicator vẽ và
+   gửi alert bình thường. Tập bị loại chính là những tín hiệu đến **sớm** sau
+   một tín hiệu trước — tức nhóm `wait` **ngắn** — và theo đúng cấu trúc đã
+   nêu ở §11 mục 1, `wait` ngắn tương quan với `rr` **tệ**. Nói cách khác:
+   strategy hệ thống bỏ đúng nhóm setup có `rr` thấp, giữ lại nhóm `rr` cao
+   hơn mức trung bình thật của toàn bộ tín hiệu.
+
+   Hệ quả phương pháp: **đọc phân phối `rr` từ alert của indicator rồi dùng nó
+   để giải thích đường equity của strategy là so sánh hai tập dữ liệu khác
+   nhau**, và sai lệch giữa hai tập đó có **dấu biết trước** — equity của
+   strategy sẽ trông đẹp hơn phân phối `rr` gốc một cách có hệ thống, không
+   phải vì strategy "chọn lọc thông minh" mà đơn thuần vì nó bỏ sót đúng phần
+   tệ do đang bận với lệnh khác. Đây chính là cái bẫy phương pháp mà §11 mục 1
+   và mục 2 được viết ra để phòng: đo `rr` cùng `wait` là cần, nhưng đo trên
+   **đúng tập** (tín hiệu indicator, không phải kết quả strategy) mới là điều
+   kiện đủ.
