@@ -49,7 +49,7 @@
 //  tuong box. Mui ten tin hieu dung plotshape — khong co tran.
 //
 //  Kiem chung: may trang thai duoc dung lai bang Python o
-//  tests/pine_oracles/orfade_oracle.py voi 18 test va 11 dot bien deu chet.
+//  tests/pine_oracles/orfade_oracle.py voi 22 test va 15 dot bien deu chet.
 //  Pine KHONG compile duoc o may viet ra file nay. Phan VE va BANG khong co
 //  test, chi soat tay.
 // =============================================================================
