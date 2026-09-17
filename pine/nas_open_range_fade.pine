@@ -87,17 +87,24 @@ bool inWin2 = mins >= win2 and mins < win2 + rangeMinutes
 bool inWin  = inWin1 or inWin2
 
 // Phien moi = vua BUOC VAO mot cua so gom ma nen truoc chua o trong do.
-// Ep na ve false la can thiet: tren nen dau chart `inWin1[1]` la na, va `na`
-// trong ngu canh boolean lam ca bieu thuc thanh falsy — phien dau tien se bi
-// bo qua. KHONG dung nz(): nz khong co ban nap cho series bool, trinh bien dich
-// Pine se bao CE10123 va co gang khop vao ban nap simple int.
-bool prevWin1 = na(inWin1[1]) ? false : inWin1[1]
-bool prevWin2 = na(inWin2[1]) ? false : inWin2[1]
+// Ep na ve false la can thiet: tren nen dau chart nen truoc khong ton tai, va
+// `na` trong ngu canh boolean lam ca bieu thuc thanh falsy — phien dau tien se
+// bi bo qua.
+//
+// CA `nz` LAN `na` DEU KHONG NHAN series bool (CE10123): nz chi co ban nap
+// so nguyen/so thuc, na chi co ban nap so thuc. Nen phai di vong qua int.
+// `inWin1` khong bao gio la na (no la phep so sanh), nen `inWin1 ? 1 : 0` luon
+// ra 0 hoac 1; chi rieng phep lui mot nen `[1]` moi sinh ra na, va nz chan no.
+int inWin1i = inWin1 ? 1 : 0
+int inWin2i = inWin2 ? 1 : 0
+
+bool prevWin1 = nz(inWin1i[1], 0) == 1
+bool prevWin2 = nz(inWin2i[1], 0) == 1
 
 bool newSess = (inWin1 and not prevWin1) or (inWin2 and not prevWin2)
 
 // ---------------------------------------------------------------- trang thai
-var string sessName      = na
+var string sessName      = ""
 var int    winStartBar   = na
 var float  rangeHigh     = na
 var float  rangeLow      = na
@@ -115,8 +122,9 @@ var int    dnBar         = na
 var float  lastDownClose = na
 var float  lastUpClose   = na
 var box    rangeBox      = na
+var bool   hasBox        = false
 
-var string lastSigDir   = na
+var string lastSigDir   = ""
 var float  lastSigLevel = na
 var float  lastSigClose = na
 var int    lastSigWait  = na
@@ -151,6 +159,7 @@ if isM1 and barstate.isconfirmed
         lastDownClose := na
         lastUpClose   := na
         rangeBox      := na
+        hasBox        := false
 
     // 1a. gom range
     if inWin
@@ -170,6 +179,7 @@ if isM1 and barstate.isconfirmed
             rangeBox := box.new(winStartBar, rangeHigh, bar_index, rangeLow,
                  border_color=color.new(color.gray, 20),
                  bgcolor=color.new(color.gray, boxTransp))
+            hasBox   := true
 
     if not inWin and rangeOk
         // 2. tin hieu
@@ -212,7 +222,7 @@ if isM1 and barstate.isconfirmed
             lastUpClose := close
 
     // noi dai box sang phai suot phien
-    if showBox and not na(rangeBox)
+    if showBox and hasBox
         box.set_right(rangeBox, bar_index)
 
     if upSig or dnSig
@@ -247,11 +257,13 @@ f_armTxt(armed, lvl, brk) =>
          + "  (" + str.tostring(bar_index - brk) + " nen)" : "READY"
 
 var table tbl = na
+var bool  tblMade = false
 if showTable and barstate.islast and isM1
-    if na(tbl)
-        tbl := table.new(position.top_right, 2, 5, border_width=1)
+    if not tblMade
+        tbl     := table.new(position.top_right, 2, 5, border_width=1)
+        tblMade := true
     table.cell(tbl, 0, 0, "phien", text_size=size.small)
-    table.cell(tbl, 1, 0, na(sessName) ? "—" : sessName + "  (" + str.tostring(nWin) + " nen)", text_size=size.small)
+    table.cell(tbl, 1, 0, sessName == "" ? "—" : sessName + "  (" + str.tostring(nWin) + " nen)", text_size=size.small)
     table.cell(tbl, 0, 1, "range", text_size=size.small)
     table.cell(tbl, 1, 1, rangeOk ? str.tostring(rangeHigh, format.mintick) + " / " + str.tostring(rangeLow, format.mintick) : "—", text_size=size.small)
     table.cell(tbl, 0, 2, "chieu BAN", text_size=size.small)
@@ -259,7 +271,7 @@ if showTable and barstate.islast and isM1
     table.cell(tbl, 0, 3, "chieu MUA", text_size=size.small)
     table.cell(tbl, 1, 3, f_armTxt(dnArmed, dnLevel, dnBar), text_size=size.small)
     table.cell(tbl, 0, 4, "tin hieu cuoi", text_size=size.small)
-    table.cell(tbl, 1, 4, na(lastSigDir) ? "—" : lastSigDir + " " + str.tostring(lastSigClose, format.mintick) + "  cho " + str.tostring(lastSigWait), text_size=size.small)
+    table.cell(tbl, 1, 4, lastSigDir == "" ? "—" : lastSigDir + " " + str.tostring(lastSigClose, format.mintick) + "  cho " + str.tostring(lastSigWait), text_size=size.small)
 
 // ---------------------------------------------------------------- alert
 if upSig
