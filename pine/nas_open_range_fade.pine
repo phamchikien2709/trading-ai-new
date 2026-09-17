@@ -87,10 +87,14 @@ bool inWin2 = mins >= win2 and mins < win2 + rangeMinutes
 bool inWin  = inWin1 or inWin2
 
 // Phien moi = vua BUOC VAO mot cua so gom ma nen truoc chua o trong do.
-// nz(..., false) can thiet: tren nen dau chart `inWin1[1]` la na, va `na` trong
-// ngu canh boolean lam ca bieu thuc thanh falsy — phien dau tien se bi bo qua.
-bool newSess = (inWin1 and not nz(inWin1[1], false))
-     or (inWin2 and not nz(inWin2[1], false))
+// Ep na ve false la can thiet: tren nen dau chart `inWin1[1]` la na, va `na`
+// trong ngu canh boolean lam ca bieu thuc thanh falsy — phien dau tien se bi
+// bo qua. KHONG dung nz(): nz khong co ban nap cho series bool, trinh bien dich
+// Pine se bao CE10123 va co gang khop vao ban nap simple int.
+bool prevWin1 = na(inWin1[1]) ? false : inWin1[1]
+bool prevWin2 = na(inWin2[1]) ? false : inWin2[1]
+
+bool newSess = (inWin1 and not prevWin1) or (inWin2 and not prevWin2)
 
 // ---------------------------------------------------------------- trang thai
 var string sessName      = na

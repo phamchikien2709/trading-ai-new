@@ -422,8 +422,9 @@ file này.
    khi:
 
    ```pine
-   bool newSess = (inWin1 and not nz(inWin1[1], false))
-        or (inWin2 and not nz(inWin2[1], false))
+   bool prevWin1 = na(inWin1[1]) ? false : inWin1[1]
+   bool prevWin2 = na(inWin2[1]) ? false : inWin2[1]
+   bool newSess  = (inWin1 and not prevWin1) or (inWin2 and not prevWin2)
    ```
 
    Đây là một **sự kiện cạnh lên**: `newSess` chỉ đúng trên đúng một nến —

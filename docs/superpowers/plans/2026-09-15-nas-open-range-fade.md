@@ -683,10 +683,14 @@ bool inWin2 = mins >= win2 and mins < win2 + rangeMinutes
 bool inWin  = inWin1 or inWin2
 
 // Phien moi = vua BUOC VAO mot cua so gom ma nen truoc chua o trong do.
-// nz(..., false) can thiet: tren nen dau chart `inWin1[1]` la na, va `na` trong
-// ngu canh boolean lam ca bieu thuc thanh falsy — phien dau tien se bi bo qua.
-bool newSess = (inWin1 and not nz(inWin1[1], false))
-     or (inWin2 and not nz(inWin2[1], false))
+// Ep na ve false la can thiet: tren nen dau chart `inWin1[1]` la na, va `na`
+// trong ngu canh boolean lam ca bieu thuc thanh falsy — phien dau tien se bi
+// bo qua. KHONG dung nz(): nz khong co ban nap cho series bool, trinh bien dich
+// Pine se bao CE10123 va co gang khop vao ban nap simple int.
+bool prevWin1 = na(inWin1[1]) ? false : inWin1[1]
+bool prevWin2 = na(inWin2[1]) ? false : inWin2[1]
+
+bool newSess = (inWin1 and not prevWin1) or (inWin2 and not prevWin2)
 
 // ---------------------------------------------------------------- trang thai
 var string sessName      = na
@@ -974,4 +978,4 @@ Message phải nói rõ: **chưa compile**, đã qua checker tĩnh nào, và đ�
 
 2. **Phần vẽ, bảng và alert không có test nào.** Giống mọi file Pine khác trong repo. Bất biến "mọi lệnh vẽ gác bằng biến trạng thái, không lệnh nào tính lại điều kiện" (§5.3) chỉ được soát tay — và đó chính là lỗi mà `kill_peak` đã mắc một lần.
 
-3. **Logic tính `newSess` không có test tự động.** Oracle nhận sẵn nhãn phiên, nên phép chuyển từ `hour(time, tz)` sang nhãn ấy — gồm cả cái bẫy `nz(inWin1[1], false)` ở nến đầu chart — nằm hoàn toàn trong Pine và chỉ được đọc tay. Đây là đánh đổi có chủ ý của spec §10.1 (múi giờ không phải thứ đang có rủi ro), nhưng nó để lại đúng một mảng không được máy nào canh.
+3. **Logic tính `newSess` không có test tự động.** Oracle nhận sẵn nhãn phiên, nên phép chuyển từ `hour(time, tz)` sang nhãn ấy — gồm cả cái bẫy `na(inWin1[1]) ? false : inWin1[1]` ở nến đầu chart — nằm hoàn toàn trong Pine và chỉ được đọc tay. Đây là đánh đổi có chủ ý của spec §10.1 (múi giờ không phải thứ đang có rủi ro), nhưng nó để lại đúng một mảng không được máy nào canh.
