@@ -1,0 +1,175 @@
+//@version=6
+// =============================================================================
+//  EMA Wick Absorb — indicator danh dau (khong dat lenh)
+//
+//  Y tuong: mot nen bi EMA TU CHOI — rau xuyen len qua EMA nhung dong lai o
+//  DUOI no — de lai mot muc gia ma phe mua da voi toi ma khong giu duoc. Sau
+//  do, neu chinh duong EMA bo len va NUOT tron cai rau ay, thi muc bi tu choi
+//  kia da bi xu huong nuot khong can gia phai pha len. Do la tin hieu bullish.
+//  Chieu bearish soi guong hoan toan.
+//
+//  May trang thai, chieu BULLISH (BEARISH soi guong):
+//    IDLE     bullRef = na
+//    detect   nen dong: close < ema VA high > ema  -> bullRef = high nen do
+//             (nen detect MOI luon ghi de nen detect cu — "cay nen cuoi cung")
+//    tin hieu ema > bullRef                        -> BAN TIN HIEU, bullRef = na
+//
+//  BAN MOT LAN. Sau khi ban, tham chieu bi xoa; phai co nen detect MOI thi moi
+//  co tin hieu tiep. Khong to nen trang thai, khong lap lai moi nen.
+//
+//  HAI CHIEU DOC LAP. Mot nen detect bearish KHONG huy bullRef dang treo va
+//  nguoc lai. Lua chon co chu y: luat goc la mot phep soi guong, khong phai mot
+//  may trang thai duy nhat co hai nhanh. He qua phai biet — ca hai chieu co the
+//  cung treo, va mot setup bullish van song du gia da leo len tren EMA.
+//
+//  THU TU TRONG MOT NEN: 1. kiem tin hieu   2. cap nhat ref bang nen nay.
+//  Thu tu nay la de DOC cho dung tu tren xuong, KHONG phai de sua loi: mot nen
+//  KHONG THE vua ban tin hieu vua la nen detect. Chung minh (chieu bullish):
+//    - nen detect doi hoi close < ema. Voi ema, `close < ema` tuong duong
+//      `close < ema[1]`, ma dieu do lai tuong duong `ema < ema[1]` — nen detect
+//      LUON la nen co ema DANG GIAM.
+//    - nen ban tin hieu doi hoi ema > bullRef. Nhung o nen truoc no chua ban,
+//      tuc ema[1] <= bullRef. Ghep lai: ema > bullRef >= ema[1] — nen tin hieu
+//      LUON la nen co ema DANG TANG.
+//  Hai dieu kien loai tru nhau. Chieu bearish soi guong y het. He qua kiem tra
+//  duoc: so nen cho luon >= 1, khong bao gio 0. Mo phong Python tren 717k nen
+//  XAUUSD (H1 + M5) dem duoc 0 va cham, dung nhu chung minh.
+//
+//  Cung tu do: tin hieu KHONG BAO GIO ban ngay tai nen detect. Khong co dong
+//  code nao cam dieu do — no la he qua cua luat.
+//
+//  KHONG REPAINT: ca hai buoc deu gac sau barstate.isconfirmed. Luat dua tren
+//  close nen chi co nghia o nen da dong. He qua: tin hieu xuat hien tai luc
+//  dong nen, khong nhap nhay trong nen.
+//
+//  Toggle chieu (enableBull/enableBear) chi gac PHAT TIN HIEU, khong gac may
+//  trang thai: ref van duoc xoa dung luc du chieu bi tat, nen bat lai giua
+//  chung khong lam ban mot tin hieu da cu.
+//
+//  Phan ve KHONG tao mot doi tuong line hay label nao. line.new/label.new bi
+//  chan cung 500 va khi tran thi cai cu nhat LANG LE bien mat (kill_peak da
+//  mac). Tin hieu ve bang bgcolor (to nen dung mot nen), muc rau dang treo ve
+//  bang plot voi style_linebr — ca hai deu khong co tran nao. Chi tiet cua tin
+//  hieu (muc rau da nuot, so nen cho) doc o BANG trang thai va o alert JSON.
+//
+//  na() CHI CO BAN NAP SO THUC (CE10123 — commit orfade 18f167d). Moi lenh
+//  na() trong file nay deu tren float (ema, bullRef, bearRef, lastLvl). Bang
+//  dung co tblMade thay cho na(tbl), va lastDir dung sentinel "" thay cho na.
+//
+//  Kiem chung: Pine KHONG compile duoc o may viet ra file nay va file nay
+//  KHONG co oracle Python trong repo. May trang thai co duoc mo phong mot lan
+//  bang script vut di tren XAUUSD H1/M5 (tan suat tin hieu va so nen cho hop
+//  ly, 0 va cham) nhung script do KHONG duoc luu. Phan ve va bang chi soat tay.
+//  Paste len TradingView de xac nhan compile.
+// =============================================================================
+indicator("EMA Wick Absorb", overlay=true)
+
+// ---------------------------------------------------------------- inputs
+grpEma = "EMA"
+emaLen = input.int(20, "EMA length", minval=1, group=grpEma)
+
+grpDir     = "Chieu"
+enableBull = input.bool(true, "Enable BULLISH", group=grpDir)
+enableBear = input.bool(true, "Enable BEARISH", group=grpDir)
+
+grpShow   = "Hien thi"
+showEma   = input.bool(true, "Duong EMA", group=grpShow)
+showRef   = input.bool(true, "Muc dang treo", group=grpShow)
+showBg    = input.bool(true, "To nen tai nen tin hieu", group=grpShow)
+showTable = input.bool(true, "Bang trang thai", group=grpShow)
+
+grpBg   = "Mau nen tin hieu"
+bgTrans = input.int(80, "Do trong suot", minval=0, maxval=100, group=grpBg)
+bullBg  = color.new(input.color(color.green, "BULLISH", group=grpBg), bgTrans)
+bearBg  = color.new(input.color(color.red, "BEARISH", group=grpBg), bgTrans)
+
+// ---- KHOI EMAWA ----
+// ta.* phai o top level: chung giu state noi bo, goi trong if la sai am tham
+float ema = ta.ema(close, emaLen)
+bool  ok  = not na(ema)
+
+var float bullRef = na   // high cua nen detect bullish gan nhat
+var int   bullBar = na   // bar_index cua nen do
+var float bearRef = na
+var int   bearBar = na
+
+bool  bullSig  = false
+float bullLvl  = na
+int   bullWait = na
+bool  bearSig  = false
+float bearLvl  = na
+int   bearWait = na
+
+// ---- chieu BULLISH ----
+// 1. tin hieu (mot nen khong the vua ban vua detect — chung minh o header)
+if ok and not na(bullRef) and ema > bullRef and barstate.isconfirmed
+    if enableBull
+        bullSig  := true
+        bullLvl  := bullRef
+        bullWait := bar_index - bullBar
+    bullRef := na
+    bullBar := na
+
+// 2. detect: nen dong duoi ema nhung rau xuyen len qua ema
+if ok and close < ema and high > ema and barstate.isconfirmed
+    bullRef := high
+    bullBar := bar_index
+
+// ---- chieu BEARISH (guong) ----
+if ok and not na(bearRef) and ema < bearRef and barstate.isconfirmed
+    if enableBear
+        bearSig  := true
+        bearLvl  := bearRef
+        bearWait := bar_index - bearBar
+    bearRef := na
+    bearBar := na
+
+if ok and close > ema and low < ema and barstate.isconfirmed
+    bearRef := low
+    bearBar := bar_index
+// ---- HET KHOI EMAWA ----
+
+// ---------------------------------------------------------------- ve
+plot(showEma ? ema : na, "EMA", color=color.new(color.orange, 0), linewidth=2)
+
+plot(showRef ? bullRef : na, "Rau bullish dang treo",
+     color=color.new(color.teal, 20), style=plot.style_linebr, linewidth=1)
+plot(showRef ? bearRef : na, "Rau bearish dang treo",
+     color=color.new(color.red, 20), style=plot.style_linebr, linewidth=1)
+
+// Tin hieu = MOT nen duoc to nen. Hai chieu khong bao gio trung nhau tren cung
+// mot nen (chung minh o header: bullSig doi ema tang, bearSig doi ema giam),
+// nen nhanh bearSig cua bieu thuc ba ngoi khong the bi nhanh bullSig che mat.
+bgcolor(showBg ? (bullSig ? bullBg : bearSig ? bearBg : na) : na, title="Tin hieu")
+
+// ---------------------------------------------------------------- bang
+// na() chi co ban nap SO THUC (CE10123, xem commit orfade 18f167d). Nen
+// lastDir dung sentinel "" thay vi na, va bang dung co tblMade thay na(tbl).
+var float  lastLvl  = na
+var string lastDir  = ""
+var int    lastWait = na
+if bullSig or bearSig
+    lastLvl  := bullSig ? bullLvl : bearLvl
+    lastDir  := bullSig ? "BULLISH" : "BEARISH"
+    lastWait := bullSig ? bullWait : bearWait
+
+var table tbl     = na
+var bool  tblMade = false
+if showTable and barstate.islast
+    if not tblMade
+        tbl     := table.new(position.top_right, 2, 4, border_width=1)
+        tblMade := true
+    table.cell(tbl, 0, 0, "EMA(" + str.tostring(emaLen) + ")", text_size=size.small)
+    table.cell(tbl, 1, 0, na(ema) ? "—" : str.tostring(ema, format.mintick), text_size=size.small)
+    table.cell(tbl, 0, 1, "BULL rau / cho", text_size=size.small)
+    table.cell(tbl, 1, 1, na(bullRef) ? "—" : str.tostring(bullRef, format.mintick) + " / " + str.tostring(bar_index - bullBar), text_size=size.small)
+    table.cell(tbl, 0, 2, "BEAR rau / cho", text_size=size.small)
+    table.cell(tbl, 1, 2, na(bearRef) ? "—" : str.tostring(bearRef, format.mintick) + " / " + str.tostring(bar_index - bearBar), text_size=size.small)
+    table.cell(tbl, 0, 3, "tin hieu cuoi", text_size=size.small)
+    table.cell(tbl, 1, 3, na(lastLvl) ? "—" : lastDir + " " + str.tostring(lastLvl, format.mintick) + "  cho " + str.tostring(lastWait), text_size=size.small)
+
+// ---------------------------------------------------------------- alert
+if bullSig
+    alert('{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"BUY","setup":"EMAWA"' + ',"ema":' + str.tostring(ema, "0.#####") + ',"level":' + str.tostring(bullLvl, "0.#####") + ',"wait":' + str.tostring(bullWait) + '}', alert.freq_once_per_bar_close)
+if bearSig
+    alert('{"symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","direction":"SELL","setup":"EMAWA"' + ',"ema":' + str.tostring(ema, "0.#####") + ',"level":' + str.tostring(bearLvl, "0.#####") + ',"wait":' + str.tostring(bearWait) + '}', alert.freq_once_per_bar_close)
