@@ -1,0 +1,89 @@
+//@version=6
+// =============================================================================
+//  Bar Break Trend — indicator trang thai thi truong (khong dat lenh)
+//
+//  Hai loai nen detect:
+//    detect_bullish_bar  close > high cua NEN TANG gan nhat (close > open)
+//    detect_bearish_bar  close < low  cua NEN GIAM gan nhat (close < open)
+//  "Gan nhat" KHONG can la nen lien truoc — la nen tang/giam cuoi cung trong
+//  qua khu, bao xa cung duoc. Nen doji (close == open) khong tinh la tang hay
+//  giam nen khong bao gio thanh tham chieu.
+//
+//  Hai kich hoat trend:
+//    bullTrig  detect_bullish_bar VA close > high cua detect_bearish_bar gan nhat
+//    bearTrig  detect_bearish_bar VA close < low  cua detect_bullish_bar gan nhat
+//
+//  May trang thai 3 mau nen (bat dau XAM):
+//    bullTrig                          -> XANH
+//    bearTrig                          -> DO
+//    dang XANH, detect bearish ma chua bearTrig -> XAM (mat da)
+//    dang DO,   detect bullish ma chua bullTrig -> XAM (mat da)
+//    con lai                           -> giu nguyen
+//  Tu XAM chi thoat ra bang mot kich hoat. Nen thoa CA HAI kich hoat (hiem,
+//  can dBearHigh < close < dBullLow) bi coi la mau thuan: giu nguyen trang thai.
+//
+//  "QUA" la vuot han: close == muc tham chieu KHONG tinh.
+//
+//  THU TU TRONG MOT NEN:
+//    1. kiem su kien bang tham chieu CU   2. cap nhat trang thai
+//    3. cap nhat tham chieu bang nen nay
+//  Dao 3 len truoc 1 thi nen se so voi chinh no (close > high cua chinh no
+//  la khong the) — detect chet am tham.
+//
+//  KHONG REPAINT: moi buoc gac sau barstate.isconfirmed. Trang thai doi luc
+//  dong nen; nen realtime dang chay mang mau cua trang thai truoc.
+//
+//  Ve bang bgcolor — khong line.new/label.new, khong dinh tran 500 doi tuong.
+// =============================================================================
+indicator("Bar Break Trend", shorttitle = "BBT", overlay = true)
+
+colBull = input.color(color.green, "Mau XANH (bullish trend)")
+colBear = input.color(color.red,   "Mau DO (bearish trend)")
+colNeu  = input.color(color.gray,  "Mau XAM (trung tinh / mat da)")
+transp  = input.int(85, "Do trong suot nen", minval = 0, maxval = 100)
+
+// --- tham chieu -------------------------------------------------------------
+var float lastUpHigh = na   // high nen tang gan nhat
+var float lastDnLow  = na   // low nen giam gan nhat
+var float dBullLow   = na   // low cua detect_bullish_bar gan nhat
+var float dBearHigh  = na   // high cua detect_bearish_bar gan nhat
+
+// 1 = XANH, -1 = DO, 0 = XAM
+var int state = 0
+
+if barstate.isconfirmed
+    // 1. su kien — chi dung tham chieu cu
+    bool detBull  = not na(lastUpHigh) and close > lastUpHigh
+    bool detBear  = not na(lastDnLow)  and close < lastDnLow
+    bool bullTrig = detBull and not na(dBearHigh) and close > dBearHigh
+    bool bearTrig = detBear and not na(dBullLow)  and close < dBullLow
+
+    // 2. trang thai
+    if bullTrig and not bearTrig
+        state := 1
+    else if bearTrig and not bullTrig
+        state := -1
+    else if not bullTrig and not bearTrig
+        if state == 1 and detBear
+            state := 0
+        else if state == -1 and detBull
+            state := 0
+
+    // 3. tham chieu — cap nhat bang nen vua dong
+    if close > open
+        lastUpHigh := high
+    else if close < open
+        lastDnLow := low
+    if detBull
+        dBullLow := low
+    if detBear
+        dBearHigh := high
+
+// --- ve ---------------------------------------------------------------------
+color base = state == 1 ? colBull : state == -1 ? colBear : colNeu
+bgcolor(color.new(base, transp), title = "Trang thai")
+
+// --- alert (nen dung "Once Per Bar Close") ---------------------------------
+alertcondition(state == 1  and state[1] != 1,  "BBT -> XANH", "Bar Break Trend: chuyen sang BULLISH")
+alertcondition(state == -1 and state[1] != -1, "BBT -> DO",   "Bar Break Trend: chuyen sang BEARISH")
+alertcondition(state == 0  and state[1] != 0,  "BBT -> XAM",  "Bar Break Trend: chuyen sang TRUNG TINH")
