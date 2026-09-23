@@ -1,0 +1,128 @@
+//@version=6
+// =============================================================================
+//  Quarterly Theory — ranh gioi quy + True Open (khong tin hieu, khong lenh)
+//
+//  Thoi gian la fractal chia 4. Ngay giao dich ES/NQ bat dau 18:00 New York.
+//
+//  DUONG DOC (ranh gioi quy):
+//    Quy cua ngay (6h)   18:00 · 00:00 · 06:00 · 12:00 NY    net lien, dam
+//    Quy 90 phut         moi 90' tinh tu 18:00 (… 06:00 · 07:30 · 09:00 · 10:30 …)
+//                        net cham, nhat. Diem trung quy ngay chi ve duong ngay.
+//
+//  DUONG NGANG (True Open = gia mo cua Q2 cua chu ky):
+//    Weekly TO   open thu 3 = 18:00 toi thu 2 NY     keo toi het tuan
+//    Daily TO    00:00 NY (trung Midnight Open)       keo toi 18:00
+//    Session TO  Q2 cua moi phien 6h: 19:30 · 01:30 · 07:30 · 13:30
+//                                                     keo toi het phien
+//  Trong Q1 cua moi chu ky CHUA co True Open -> de trong (plot ngat net, khong
+//  co doan noi doc giua hai chu ky).
+//
+//  PHAT HIEN MOC bang "chi so quy doi so voi nen truoc", khong so khop gio
+//  chinh xac — nen mot moc bi lo (nghi le) chi mat mot duong, khong lech ca
+//  ngay. Doi lai, gia tri True Open lay tu open cua nen DAU TIEN sau moc: chi
+//  dung khi moc trung dau nen. Vi vay moi lop co nguong khung rieng:
+//    duong quy ngay, Weekly/Daily TO   <= 60 phut (moc tron gio)
+//    Session TO                        <= 30 phut (moc :30 — H1 se lay sai nen)
+//    duong quy 90 phut                 <= 15 phut (mac dinh, chinh duoc)
+//
+//  MUI GIO: moi phep tinh gio theo "America/New_York" nen DST tu xu ly. Chart
+//  de UTC+7: mua he VN = NY +11h, mua dong VN = NY +12h.
+//
+//  GIOI HAN: duong doc dung line.new — 4 + 16 = 20 duong/ngay, max 500 -> ~25
+//  ngay gan nhat; cu hon tu bien mat. True Open dung plot, khong gioi han.
+// =============================================================================
+indicator("Quarterly Theory", shorttitle = "QT", overlay = true,
+     max_lines_count = 500, max_labels_count = 500)
+
+const string TZ = "America/New_York"
+
+grpQ = "Ranh gioi quy"
+showDayQ = input.bool(true,  "Quy cua ngay (6h)", inline = "dq", group = grpQ)
+cDayQ    = input.color(color.new(color.gray, 30), "", inline = "dq", group = grpQ)
+show90Q  = input.bool(true,  "Quy 90 phut",       inline = "nq", group = grpQ)
+c90Q     = input.color(color.new(color.gray, 65), "", inline = "nq", group = grpQ)
+showQLbl = input.bool(false, "Nhan Q1-Q4 o dau quy ngay", group = grpQ)
+
+grpT = "True Open"
+showWTO = input.bool(true, "Weekly TO",  inline = "w", group = grpT)
+cWTO    = input.color(color.new(color.purple, 0), "", inline = "w", group = grpT)
+showDTO = input.bool(true, "Daily TO",   inline = "d", group = grpT)
+cDTO    = input.color(color.new(color.orange, 0), "", inline = "d", group = grpT)
+showSTO = input.bool(true, "Session TO", inline = "s", group = grpT)
+cSTO    = input.color(color.new(color.teal, 0),   "", inline = "s", group = grpT)
+wTO     = input.int(1, "Do day", minval = 1, maxval = 4, group = grpT)
+showTag = input.bool(true, "Nhan ten o nen cuoi", group = grpT)
+
+grpV = "Nguong khung thoi gian"
+maxTF90 = input.int(15, "Duong quy 90': chi hien khi khung <= (phut)", minval = 1, group = grpV)
+
+bool intra  = timeframe.isintraday
+int  tfSec  = timeframe.in_seconds()
+bool tfDay  = intra and tfSec <= 60 * 60
+bool tfSess = intra and tfSec <= 30 * 60
+bool tf90   = intra and tfSec <= maxTF90 * 60
+
+// --- chi so quy -------------------------------------------------------------
+// Phut tinh tu 18:00 NY (0..1439) -> quy ngay 0..3, quy 90' 0..15.
+int mNY   = (hour(time, TZ) * 60 + minute(time, TZ) - 18 * 60 + 1440) % 1440
+int qDay  = math.floor(mNY / 360)
+int q90   = math.floor(mNY / 90)
+int qSess = q90 % 4                       // quy 90' trong phien 6h: 0..3
+
+bool bDay = not na(qDay[1]) and qDay != qDay[1]
+bool b90  = not na(q90[1])  and q90  != q90[1]
+int  dow  = dayofweek(time, TZ)
+
+// --- duong doc --------------------------------------------------------------
+vline(color c, string st, int w) =>
+    line.new(bar_index, low, bar_index, high, extend = extend.both, color = c,
+         style = st, width = w)
+
+if bDay and showDayQ and tfDay
+    vline(cDayQ, line.style_solid, 1)
+    if showQLbl
+        label.new(bar_index, high, "Q" + str.tostring(qDay + 1), yloc = yloc.abovebar,
+             style = label.style_none, textcolor = cDayQ, size = size.small)
+else if b90 and show90Q and tf90
+    vline(c90Q, line.style_dotted, 1)
+
+// --- True Open --------------------------------------------------------------
+var float wto = na
+var float dto = na
+var float sto = na
+
+if bDay and qDay == 0
+    // 18:00: bat dau ngay giao dich moi (Q1 = Asia) -> Daily TO chua co
+    dto := na
+    if dow == dayofweek.sunday
+        wto := na                        // tuan moi: Q1 tuan (thu 2) chua co TO
+    else if dow == dayofweek.monday
+        wto := open                      // 18:00 thu 2 = mo cua ngay thu 3
+if bDay and qDay == 1
+    dto := open                          // 00:00 NY
+if bDay
+    sto := na                            // phien 6h moi: Q1 phien chua co TO
+else if b90 and qSess == 1
+    sto := open                          // Q2 cua phien: 19:30/01:30/07:30/13:30
+
+bool wOn = showWTO and tfDay
+bool dOn = showDTO and tfDay
+bool sOn = showSTO and tfSess
+plot(wOn ? wto : na, "Weekly TO",  cWTO, wTO, plot.style_linebr)
+plot(dOn ? dto : na, "Daily TO",   cDTO, wTO, plot.style_linebr)
+plot(sOn ? sto : na, "Session TO", cSTO, wTO, plot.style_linebr)
+
+// --- nhan o nen cuoi --------------------------------------------------------
+// Moi True Open MOT label, xoa-tao lai o nen cuoi -> toi da 3, khong tran.
+tag(label old, float y, string txt, color c, bool on) =>
+    label.delete(old)
+    on and not na(y) ? label.new(bar_index, y, txt, style = label.style_label_left,
+         color = color(na), textcolor = c, size = size.small) : label(na)
+
+var label tW = na
+var label tD = na
+var label tS = na
+if barstate.islast
+    tW := tag(tW, wto, "WTO", cWTO, showTag and wOn)
+    tD := tag(tD, dto, "DTO", cDTO, showTag and dOn)
+    tS := tag(tS, sto, "STO", cSTO, showTag and sOn)
