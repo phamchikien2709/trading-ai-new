@@ -13,14 +13,13 @@
 //    bullTrig  detect_bullish_bar VA close > high cua detect_bearish_bar gan nhat
 //    bearTrig  detect_bearish_bar VA close < low  cua detect_bullish_bar gan nhat
 //
-//  May trang thai 3 mau nen (bat dau XAM):
-//    bullTrig                          -> XANH
-//    bearTrig                          -> DO
-//    dang XANH, detect bearish ma chua bearTrig -> XAM (mat da)
-//    dang DO,   detect bullish ma chua bullTrig -> XAM (mat da)
-//    con lai                           -> giu nguyen
-//  Tu XAM chi thoat ra bang mot kich hoat. Nen thoa CA HAI kich hoat (hiem,
-//  can dBearHigh < close < dBullLow) bi coi la mau thuan: giu nguyen trang thai.
+//  May trang thai 2 mau nen:
+//    bullTrig  -> XANH
+//    bearTrig  -> DO
+//    con lai   -> giu nguyen (XANH giu toi khi co bearTrig, va nguoc lai)
+//  Truoc kich hoat dau tien chua co trend: nen khong to. Nen thoa CA HAI kich
+//  hoat (hiem, can dBearHigh < close < dBullLow) bi coi la mau thuan: giu
+//  nguyen trang thai.
 //
 //  "QUA" la vuot han: close == muc tham chieu KHONG tinh.
 //
@@ -39,7 +38,6 @@ indicator("Bar Break Trend", shorttitle = "BBT", overlay = true)
 
 colBull = input.color(color.green, "Mau XANH (bullish trend)")
 colBear = input.color(color.red,   "Mau DO (bearish trend)")
-colNeu  = input.color(color.gray,  "Mau XAM (trung tinh / mat da)")
 transp  = input.int(85, "Do trong suot nen", minval = 0, maxval = 100)
 
 // --- tham chieu -------------------------------------------------------------
@@ -48,7 +46,7 @@ var float lastDnLow  = na   // low nen giam gan nhat
 var float dBullLow   = na   // low cua detect_bullish_bar gan nhat
 var float dBearHigh  = na   // high cua detect_bearish_bar gan nhat
 
-// 1 = XANH, -1 = DO, 0 = XAM
+// 1 = XANH, -1 = DO, 0 = chua co trend (chi truoc kich hoat dau tien)
 var int state = 0
 
 if barstate.isconfirmed
@@ -63,11 +61,6 @@ if barstate.isconfirmed
         state := 1
     else if bearTrig and not bullTrig
         state := -1
-    else if not bullTrig and not bearTrig
-        if state == 1 and detBear
-            state := 0
-        else if state == -1 and detBull
-            state := 0
 
     // 3. tham chieu — cap nhat bang nen vua dong
     if close > open
@@ -80,10 +73,9 @@ if barstate.isconfirmed
         dBearHigh := high
 
 // --- ve ---------------------------------------------------------------------
-color base = state == 1 ? colBull : state == -1 ? colBear : colNeu
-bgcolor(color.new(base, transp), title = "Trang thai")
+color bg = state == 1 ? color.new(colBull, transp) : state == -1 ? color.new(colBear, transp) : na
+bgcolor(bg, title = "Trang thai")
 
 // --- alert (nen dung "Once Per Bar Close") ---------------------------------
 alertcondition(state == 1  and state[1] != 1,  "BBT -> XANH", "Bar Break Trend: chuyen sang BULLISH")
 alertcondition(state == -1 and state[1] != -1, "BBT -> DO",   "Bar Break Trend: chuyen sang BEARISH")
-alertcondition(state == 0  and state[1] != 0,  "BBT -> XAM",  "Bar Break Trend: chuyen sang TRUNG TINH")
