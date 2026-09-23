@@ -135,7 +135,7 @@ plot(showMO and tfKz and not newDay ? mo : na, "Midnight Open", cMO, wMO,
 // high[1]/low[1] + lookahead_on: doc nen ngay DA DONG, khong repaint. "Ngay" la
 // ngay giao dich cua san (ES/NQ: 18:00-17:00 NY), trung nen D cua TradingView.
 [pdh, pdl] = request.security(syminfo.tickerid, "D", [high[1], low[1]],
-     lookahead = barmap.lookahead_on)
+     lookahead = barmerge.lookahead_on)
 bool tdChange = time("D") != time("D")[1]   // nen dau ngay giao dich moi -> ngat net
 
 bool pdOn = showPD and tfKz and not tdChange
