@@ -39,9 +39,10 @@
 //  HAI NGUONG KHUNG: macro chi co nghia o khung nho (mac dinh <= 15 phut);
 //  killzone, Midnight Open va cac muc gia van doc duoc tren H1 (mac dinh <= 60 phut).
 //
-//  Ve bang bgcolor/plot — khong line.new; label chi 6 cai o nen cuoi.
+//  Ve bang bgcolor/plot — khong line.new; label chi 6 cai o nen cuoi; box
+//  phien 2 cai/ngay (max 500, qua do box cu nhat tu mat).
 // =============================================================================
-indicator("ICT Time Map", shorttitle = "ICT Time", overlay = true)
+indicator("ICT Time Map", shorttitle = "ICT Time", overlay = true, max_boxes_count = 500)
 
 const string TZ = "America/New_York"
 
@@ -80,6 +81,8 @@ showLo  = input.bool(true, "London High / Low", inline = "lo", group = grpL)
 cLo     = input.color(color.new(color.blue, 0), "", inline = "lo", group = grpL)
 wLvl    = input.int(1, "Do day", minval = 1, maxval = 4, group = grpL)
 showTag = input.bool(true, "Nhan ten o nen cuoi", group = grpL)
+boxAs   = input.bool(true, "Box phien Asia",   group = grpL)
+boxLo   = input.bool(true, "Box phien London", group = grpL)
 
 grpV = "Nguong khung thoi gian"
 maxTFMacro = input.int(15, "Macro: chi hien khi khung <= (phut)", minval = 1, group = grpV)
@@ -172,6 +175,26 @@ plot(asOn ? asH : na, "Asia High",   cAs, wLvl, plot.style_linebr)
 plot(asOn ? asL : na, "Asia Low",    cAs, wLvl, plot.style_linebr)
 plot(loOn ? loH : na, "London High", cLo, wLvl, plot.style_linebr)
 plot(loOn ? loL : na, "London Low",  cLo, wLvl, plot.style_linebr)
+
+// --- box phien --------------------------------------------------------------
+// Mo box o nen dau phien, gian theo high/low trong phien, dung lai khi het phien
+// (box cu giu nguyen tren chart). 2 box/ngay -> max_boxes_count 500 giu ~250
+// ngay; qua do box cu nhat tu bien mat — du dung cho check tay gan day.
+sessBox(bool inS, bool on, color c) =>
+    bool start = inS and not inS[1]   // tinh o MOI nen, ngoai khoi if
+    var box b = na
+    if on
+        if start
+            b := box.new(bar_index, high, bar_index, low, border_color = c,
+                 bgcolor = color.new(c, 90))
+        else if inS and not na(b)
+            box.set_right(b, bar_index)
+            box.set_top(b, math.max(box.get_top(b), high))
+            box.set_bottom(b, math.min(box.get_bottom(b), low))
+    b
+
+sessBox(zAsia, boxAs and tfKz, cAs)
+sessBox(zLon,  boxLo and tfKz, cLo)
 
 // --- nhan o nen cuoi --------------------------------------------------------
 // Moi muc MOT label, xoa-tao lai o nen cuoi -> tong cong toi da 6, khong tran.
