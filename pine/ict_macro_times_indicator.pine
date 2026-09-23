@@ -21,6 +21,12 @@
 //  18:00 gia lam midnight. Nen reset ve na de plot ngat net giua hai ngay,
 //  khong co doan noi doc.
 //
+//  MUC THANH KHOAN (plot chi co net lien -> phan biet bang mau):
+//    PDH/PDL          dinh/day ngay giao dich truoc (ES/NQ: 18:00-17:00 NY)
+//    Asia/London H/L  dinh/day phien, cung gio voi killzone. CHI ke sau khi
+//                     phien dong; giu toi khi phien cung loai lan sau mo.
+//  Moi muc co mot nhan o nen cuoi (toi da 6 label, xoa-tao lai, khong tran).
+//
 //  MUI GIO: moi session khai bao theo "America/New_York" nen DST tu xu ly.
 //  Chart de UTC+7 van dung cho: mua he (EDT) VN = NY +11h, mua dong (EST)
 //  VN = NY +12h — khong phai sua tay khi doi mua.
@@ -33,7 +39,7 @@
 //  HAI NGUONG KHUNG: macro chi co nghia o khung nho (mac dinh <= 15 phut);
 //  killzone va Midnight Open van doc duoc tren H1 (mac dinh <= 60 phut).
 //
-//  Ve bang bgcolor/plot — khong line.new/label.new, khong dinh tran 500 doi tuong.
+//  Ve bang bgcolor/plot — khong line.new; label chi 6 cai o nen cuoi.
 // =============================================================================
 indicator("ICT Time Map", shorttitle = "ICT Time", overlay = true)
 
@@ -64,6 +70,16 @@ grpO = "Midnight Open"
 showMO  = input.bool(true, "Hien Midnight Open", group = grpO)
 cMO     = input.color(color.new(color.gray, 0), "Mau", group = grpO)
 wMO     = input.int(1, "Do day", minval = 1, maxval = 4, group = grpO)
+
+grpL = "Muc thanh khoan"
+showPD  = input.bool(true, "PDH / PDL",         inline = "pd", group = grpL)
+cPD     = input.color(color.new(color.red, 0),  "", inline = "pd", group = grpL)
+showAs  = input.bool(true, "Asia High / Low",   inline = "as", group = grpL)
+cAs     = input.color(color.new(color.gray, 0), "", inline = "as", group = grpL)
+showLo  = input.bool(true, "London High / Low", inline = "lo", group = grpL)
+cLo     = input.color(color.new(color.blue, 0), "", inline = "lo", group = grpL)
+wLvl    = input.int(1, "Do day", minval = 1, maxval = 4, group = grpL)
+showTag = input.bool(true, "Nhan ten o nen cuoi", group = grpL)
 
 grpV = "Nguong khung thoi gian"
 maxTFMacro = input.int(15, "Macro: chi hien khi khung <= (phut)", minval = 1, group = grpV)
@@ -114,3 +130,66 @@ if newDay
 
 plot(showMO and tfKz and not newDay ? mo : na, "Midnight Open", cMO, wMO,
      plot.style_linebr)
+
+// --- PDH / PDL --------------------------------------------------------------
+// high[1]/low[1] + lookahead_on: doc nen ngay DA DONG, khong repaint. "Ngay" la
+// ngay giao dich cua san (ES/NQ: 18:00-17:00 NY), trung nen D cua TradingView.
+[pdh, pdl] = request.security(syminfo.tickerid, "D", [high[1], low[1]],
+     lookahead = barmap.lookahead_on)
+bool tdChange = time("D") != time("D")[1]   // nen dau ngay giao dich moi -> ngat net
+
+bool pdOn = showPD and tfKz and not tdChange
+plot(pdOn ? pdh : na, "PDH", cPD, wLvl, plot.style_linebr)
+plot(pdOn ? pdl : na, "PDL", cPD, wLvl, plot.style_linebr)
+
+// --- dinh/day phien ---------------------------------------------------------
+// Trong phien: chi tich luy, KHONG ke (muc chua chot). Het phien: chot va ke,
+// giu toi khi phien cung loai lan sau bat dau (luc do xoa ve na -> ngat net).
+sessHL(bool inS) =>
+    var float runHi = na
+    var float runLo = na
+    var float fixHi = na
+    var float fixLo = na
+    if inS and not inS[1]
+        runHi := high
+        runLo := low
+        fixHi := na
+        fixLo := na
+    else if inS
+        runHi := math.max(runHi, high)
+        runLo := math.min(runLo, low)
+    if not inS and inS[1]
+        fixHi := runHi
+        fixLo := runLo
+    [fixHi, fixLo]
+
+[asH, asL] = sessHL(zAsia)
+[loH, loL] = sessHL(zLon)
+
+bool asOn = showAs and tfKz
+bool loOn = showLo and tfKz
+plot(asOn ? asH : na, "Asia High",   cAs, wLvl, plot.style_linebr)
+plot(asOn ? asL : na, "Asia Low",    cAs, wLvl, plot.style_linebr)
+plot(loOn ? loH : na, "London High", cLo, wLvl, plot.style_linebr)
+plot(loOn ? loL : na, "London Low",  cLo, wLvl, plot.style_linebr)
+
+// --- nhan o nen cuoi --------------------------------------------------------
+// Moi muc MOT label, xoa-tao lai o nen cuoi -> tong cong toi da 6, khong tran.
+tag(label old, float y, string txt, color c, bool on) =>
+    label.delete(old)
+    on and not na(y) ? label.new(bar_index, y, txt, style = label.style_label_left,
+         color = color(na), textcolor = c, size = size.small) : label(na)
+
+var label tPDH = na
+var label tPDL = na
+var label tAsH = na
+var label tAsL = na
+var label tLoH = na
+var label tLoL = na
+if barstate.islast
+    tPDH := tag(tPDH, pdh, "PDH", cPD, showTag and pdOn)
+    tPDL := tag(tPDL, pdl, "PDL", cPD, showTag and pdOn)
+    tAsH := tag(tAsH, asH, "AsH", cAs, showTag and asOn)
+    tAsL := tag(tAsL, asL, "AsL", cAs, showTag and asOn)
+    tLoH := tag(tLoH, loH, "LoH", cLo, showTag and loOn)
+    tLoL := tag(tLoL, loL, "LoL", cLo, showTag and loOn)
