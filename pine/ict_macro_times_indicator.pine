@@ -1,17 +1,28 @@
 //@version=6
 // =============================================================================
-//  ICT Macro Times — to nen cac khung macro (khong tin hieu, khong dat lenh)
+//  ICT Time Map — killzone + macro + Midnight Open (khong tin hieu, khong lenh)
 //
-//  Macro = cua so ~20-30 phut ma ICT cho la algorithm chu dong tim thanh khoan.
-//  Gio goc theo New York:
+//  KILLZONE (to nhat, moi vung mot mau). Gio New York:
+//    Asian   20:00-00:00   (tat mac dinh)
+//    London  02:00-05:00
+//    NY AM   08:30-11:00   ban cho chi so (ES/NQ); forex hay dung 07:00-10:00
+//    NY PM   13:30-16:00   (tat mac dinh)
+//
+//  MACRO (to dam, ve SAU killzone nen noi len tren). Gio New York:
 //    1 London 1   02:33-03:00      5 NY AM 3    10:50-11:10
 //    2 London 2   04:03-04:30      6 NY Lunch   11:50-12:10
 //    3 NY AM 1    08:50-09:10      7 NY PM      13:10-13:40
 //    4 NY AM 2    09:50-10:10      8 Last Hour  15:15-15:45
 //  Mac dinh chi bat 3-5 (NY AM) — ba macro quan trong nhat voi ES/NQ.
 //
+//  MIDNIGHT OPEN: gia open cua nen dau tien sau 00:00 gio NY, ke ngang toi khi
+//  sang ngay NY moi. Ngay mo phien Chu nhat (ES/NQ mo 18:00 NY) KHONG co nen
+//  00:00 nen de trong — khong mang muc cua thu Sau sang, cung khong lay open
+//  18:00 gia lam midnight. Nen reset ve na de plot ngat net giua hai ngay,
+//  khong co doan noi doc.
+//
 //  MUI GIO: moi session khai bao theo "America/New_York" nen DST tu xu ly.
-//  Chart de UTC+7 van to dung cho: mua he (EDT) VN = NY +11h, mua dong (EST)
+//  Chart de UTC+7 van dung cho: mua he (EDT) VN = NY +11h, mua dong (EST)
 //  VN = NY +12h — khong phai sua tay khi doi mua.
 //
 //  time() xet GIO MO cua nen: nen nao MO trong khung thi duoc to. Session ket
@@ -19,14 +30,24 @@
 //  dau le phut (02:33, 04:03) se to tu nen dau tien mo sau moc do — vd M5 to
 //  tu 02:35.
 //
-//  Chi hien thi tren khung intraday <= maxTF phut; khung lon hon to nen vo
-//  nghia (mot nen nuot ca macro).
+//  HAI NGUONG KHUNG: macro chi co nghia o khung nho (mac dinh <= 15 phut);
+//  killzone va Midnight Open van doc duoc tren H1 (mac dinh <= 60 phut).
 //
-//  Ve bang bgcolor — khong line.new/label.new, khong dinh tran 500 doi tuong.
+//  Ve bang bgcolor/plot — khong line.new/label.new, khong dinh tran 500 doi tuong.
 // =============================================================================
-indicator("ICT Macro Times", shorttitle = "Macro", overlay = true)
+indicator("ICT Time Map", shorttitle = "ICT Time", overlay = true)
 
 const string TZ = "America/New_York"
+
+grpK = "Killzone (gio New York)"
+kAsia = input.bool(false, "Asian   20:00-00:00", inline = "ka", group = grpK)
+cAsia = input.color(color.new(color.gray, 92),   "", inline = "ka", group = grpK)
+kLon  = input.bool(true,  "London  02:00-05:00", inline = "kl", group = grpK)
+cLon  = input.color(color.new(color.blue, 92),   "", inline = "kl", group = grpK)
+kNyAm = input.bool(true,  "NY AM   08:30-11:00", inline = "kn", group = grpK)
+cNyAm = input.color(color.new(color.orange, 92), "", inline = "kn", group = grpK)
+kNyPm = input.bool(false, "NY PM   13:30-16:00", inline = "kp", group = grpK)
+cNyPm = input.color(color.new(color.teal, 92),   "", inline = "kp", group = grpK)
 
 grpM = "Macro (gio New York)"
 m1 = input.bool(false, "1 London 1   02:33-03:00", group = grpM)
@@ -37,18 +58,30 @@ m5 = input.bool(true,  "5 NY AM 3    10:50-11:10", group = grpM)
 m6 = input.bool(false, "6 NY Lunch   11:50-12:10", group = grpM)
 m7 = input.bool(false, "7 NY PM      13:10-13:40", group = grpM)
 m8 = input.bool(false, "8 Last Hour  15:15-15:45", group = grpM)
+cMacro = input.color(color.new(color.purple, 80), "Mau nen macro", group = grpM)
 
-grpV = "Hien thi"
-col    = input.color(color.new(color.purple, 80), "Mau nen macro", group = grpV)
-maxTF  = input.int(15, "Chi hien thi khi khung <= (phut)", minval = 1, group = grpV)
+grpO = "Midnight Open"
+showMO  = input.bool(true, "Hien Midnight Open", group = grpO)
+cMO     = input.color(color.new(color.gray, 0), "Mau", group = grpO)
+wMO     = input.int(1, "Do day", minval = 1, maxval = 4, group = grpO)
+
+grpV = "Nguong khung thoi gian"
+maxTFMacro = input.int(15, "Macro: chi hien khi khung <= (phut)", minval = 1, group = grpV)
+maxTFKz    = input.int(60, "Killzone + Midnight Open: khung <= (phut)", minval = 1, group = grpV)
 
 inSess(string sess) =>
     not na(time(timeframe.period, sess, TZ))
 
-bool tfOk = timeframe.isintraday and timeframe.in_seconds() <= maxTF * 60
+bool tfMacro = timeframe.isintraday and timeframe.in_seconds() <= maxTFMacro * 60
+bool tfKz    = timeframe.isintraday and timeframe.in_seconds() <= maxTFKz * 60
 
 // Goi time() o MOI nen, ngoai bieu thuc and/or: v6 danh gia and/or kieu lazy,
-// dat time() ben phai `mX and` se bi bo qua o mot so nen.
+// dat time() ben phai `x and` se bi bo qua o mot so nen.
+bool zAsia = inSess("2000-0000")
+bool zLon  = inSess("0200-0500")
+bool zNyAm = inSess("0830-1100")
+bool zNyPm = inSess("1330-1600")
+
 bool s1 = inSess("0233-0300")
 bool s2 = inSess("0403-0430")
 bool s3 = inSess("0850-0910")
@@ -58,7 +91,26 @@ bool s6 = inSess("1150-1210")
 bool s7 = inSess("1310-1340")
 bool s8 = inSess("1515-1545")
 
+// --- killzone (ve truoc — nam duoi macro) -----------------------------------
+color kzCol = kAsia and zAsia ? cAsia :
+              kLon  and zLon  ? cLon  :
+              kNyAm and zNyAm ? cNyAm :
+              kNyPm and zNyPm ? cNyPm : na
+bgcolor(tfKz ? kzCol : na, title = "Killzone")
+
+// --- macro (ve sau — noi len tren killzone) ---------------------------------
 bool inMacro = (m1 and s1) or (m2 and s2) or (m3 and s3) or (m4 and s4) or
                (m5 and s5) or (m6 and s6) or (m7 and s7) or (m8 and s8)
+bgcolor(tfMacro and inMacro ? cMacro : na, title = "Macro")
 
-bgcolor(tfOk and inMacro ? col : na, title = "Macro")
+// --- Midnight Open ----------------------------------------------------------
+int  nyDay  = dayofmonth(time, TZ)
+bool newDay = nyDay != nyDay[1]
+
+var float mo = na
+if newDay
+    // Ngay moi ma nen dau khong phai gio 0 (mo phien Chu nhat 18:00) -> de trong
+    mo := hour(time, TZ) == 0 ? open : na
+
+plot(showMO and tfKz and not newDay ? mo : na, "Midnight Open", cMO, wMO,
+     plot.style_linebr)
