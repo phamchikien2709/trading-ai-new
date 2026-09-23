@@ -1,0 +1,114 @@
+//@version=6
+// =============================================================================
+//  ICT Silver Bullet — danh dau FVG dau tien trong khung (khong dat lenh)
+//
+//  KHUNG: mac dinh 10:00-11:00 gio New York (VN mua he 21:00-22:00, mua dong
+//  22:00-23:00). Doi thanh 14:00-15:00 de xem Silver Bullet PM. Khai bao theo
+//  "America/New_York" nen DST tu xu ly.
+//
+//  FVG (cum 3 nen, nen 3 la nen hien tai):
+//    bullish  low > high[2]    vung FVG = [high[2], low]
+//    bearish  high < low[2]    vung FVG = [high, low[2]]
+//  Hai dieu kien loai tru nhau (ca hai cung dung keo theo high < low, vo ly).
+//  Chi xet khi NEN 3 mo trong khung; nen 1-2 co the nam truoc 10:00.
+//
+//  "DAU TIEN":
+//    mac dinh      chi FVG dau tien trong khung, bat ke chieu — 1 box/ngay
+//    moi chieu     FVG dau tien cua MOI chieu — toi da 1 tang + 1 giam/ngay
+//  ICT chon chieu theo draw on liquidity — viec do de trader tu quyet.
+//
+//  BOX: tu nen 1 keo sang phai toi het khung. Duong manh o 50% FVG (tham khao
+//  entry). Box/line cua ngay cu giu nguyen tren chart.
+//
+//  KHONG REPAINT: FVG chi xac nhan khi nen 3 da dong (barstate.isconfirmed).
+//
+//  Chi hien tren khung < 15 phut (khung 1 gio chi co 4 nen M15 — vo nghia).
+//  Toi da 2 box + 2 line/ngay; max 500 -> ~250 ngay lich su, qua do cai cu
+//  nhat tu bien mat.
+// =============================================================================
+indicator("ICT Silver Bullet", shorttitle = "SB", overlay = true,
+     max_boxes_count = 500, max_lines_count = 500)
+
+const string TZ = "America/New_York"
+
+sbSess   = input.session("1000-1100", "Khung Silver Bullet (gio New York)")
+eachDir  = input.bool(false, "Danh dau FVG dau tien cua MOI chieu")
+minTicks = input.int(0, "Kich thuoc FVG toi thieu (tick, 0 = khong loc)", minval = 0)
+cBull    = input.color(color.new(color.green, 80), "Mau FVG tang")
+cBear    = input.color(color.new(color.red, 80),   "Mau FVG giam")
+showMid  = input.bool(true,  "Duong 50% FVG")
+showBg   = input.bool(false, "To nen khung Silver Bullet")
+cBg      = input.color(color.new(color.yellow, 93), "Mau nen khung")
+
+bool tfOk  = timeframe.isintraday and timeframe.in_seconds() < 15 * 60
+bool inWin = not na(time(timeframe.period, sbSess, TZ))
+bool start = inWin and not inWin[1]
+
+// Tinh o MOI nen (ngoai khoi if) de lich su [2] luon day du.
+float h2 = high[2]
+float l2 = low[2]
+float minGap = minTicks * syminfo.mintick
+bool bullFvg = low > h2  and (low - h2)  >= minGap
+bool bearFvg = high < l2 and (l2 - high) >= minGap
+
+var bool doneAny  = false
+var bool doneBull = false
+var bool doneBear = false
+var box  bBull = na
+var box  bBear = na
+var line lBull = na
+var line lBear = na
+
+// Khung moi: reset co va tha box cu (box cu van nam tren chart, chi khong
+// duoc keo dai nua).
+if start
+    doneAny  := false
+    doneBull := false
+    doneBear := false
+    bBull := na
+    bBear := na
+    lBull := na
+    lBear := na
+
+bool sigBull = false
+bool sigBear = false
+
+if tfOk and inWin and barstate.isconfirmed
+    sigBull := bullFvg and (eachDir ? not doneBull : not doneAny)
+    sigBear := bearFvg and (eachDir ? not doneBear : not doneAny)
+    if sigBull
+        bBull := box.new(bar_index - 2, low, bar_index, h2, border_color = color.new(cBull, 0),
+             bgcolor = cBull)
+        if showMid
+            float mid = (low + h2) / 2
+            lBull := line.new(bar_index - 2, mid, bar_index, mid, color = color.new(cBull, 0),
+                 style = line.style_dotted)
+        doneBull := true
+        doneAny  := true
+    if sigBear
+        bBear := box.new(bar_index - 2, l2, bar_index, high, border_color = color.new(cBear, 0),
+             bgcolor = cBear)
+        if showMid
+            float mid = (l2 + high) / 2
+            lBear := line.new(bar_index - 2, mid, bar_index, mid, color = color.new(cBear, 0),
+                 style = line.style_dotted)
+        doneBear := true
+        doneAny  := true
+
+// Keo box/line cua khung hien tai sang phai toi het khung.
+if tfOk and inWin
+    if not na(bBull)
+        box.set_right(bBull, bar_index)
+    if not na(bBear)
+        box.set_right(bBear, bar_index)
+    if not na(lBull)
+        line.set_x2(lBull, bar_index)
+    if not na(lBear)
+        line.set_x2(lBear, bar_index)
+
+bgcolor(showBg and tfOk and inWin ? cBg : na, title = "Khung Silver Bullet")
+
+// --- alert (nen dung "Once Per Bar Close") ---------------------------------
+alertcondition(sigBull,            "SB FVG tang",       "Silver Bullet: FVG TANG dau tien")
+alertcondition(sigBear,            "SB FVG giam",       "Silver Bullet: FVG GIAM dau tien")
+alertcondition(sigBull or sigBear, "SB FVG bat ky",     "Silver Bullet: FVG dau tien")
