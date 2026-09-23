@@ -1,0 +1,64 @@
+//@version=6
+// =============================================================================
+//  ICT Macro Times — to nen cac khung macro (khong tin hieu, khong dat lenh)
+//
+//  Macro = cua so ~20-30 phut ma ICT cho la algorithm chu dong tim thanh khoan.
+//  Gio goc theo New York:
+//    1 London 1   02:33-03:00      5 NY AM 3    10:50-11:10
+//    2 London 2   04:03-04:30      6 NY Lunch   11:50-12:10
+//    3 NY AM 1    08:50-09:10      7 NY PM      13:10-13:40
+//    4 NY AM 2    09:50-10:10      8 Last Hour  15:15-15:45
+//  Mac dinh chi bat 3-5 (NY AM) — ba macro quan trong nhat voi ES/NQ.
+//
+//  MUI GIO: moi session khai bao theo "America/New_York" nen DST tu xu ly.
+//  Chart de UTC+7 van to dung cho: mua he (EDT) VN = NY +11h, mua dong (EST)
+//  VN = NY +12h — khong phai sua tay khi doi mua.
+//
+//  time() xet GIO MO cua nen: nen nao MO trong khung thi duoc to. Session ket
+//  thuc la mut mo (09:10 khong tinh). He qua tren khung lon hon M1: macro bat
+//  dau le phut (02:33, 04:03) se to tu nen dau tien mo sau moc do — vd M5 to
+//  tu 02:35.
+//
+//  Chi hien thi tren khung intraday <= maxTF phut; khung lon hon to nen vo
+//  nghia (mot nen nuot ca macro).
+//
+//  Ve bang bgcolor — khong line.new/label.new, khong dinh tran 500 doi tuong.
+// =============================================================================
+indicator("ICT Macro Times", shorttitle = "Macro", overlay = true)
+
+const string TZ = "America/New_York"
+
+grpM = "Macro (gio New York)"
+m1 = input.bool(false, "1 London 1   02:33-03:00", group = grpM)
+m2 = input.bool(false, "2 London 2   04:03-04:30", group = grpM)
+m3 = input.bool(true,  "3 NY AM 1    08:50-09:10", group = grpM)
+m4 = input.bool(true,  "4 NY AM 2    09:50-10:10", group = grpM)
+m5 = input.bool(true,  "5 NY AM 3    10:50-11:10", group = grpM)
+m6 = input.bool(false, "6 NY Lunch   11:50-12:10", group = grpM)
+m7 = input.bool(false, "7 NY PM      13:10-13:40", group = grpM)
+m8 = input.bool(false, "8 Last Hour  15:15-15:45", group = grpM)
+
+grpV = "Hien thi"
+col    = input.color(color.new(color.purple, 80), "Mau nen macro", group = grpV)
+maxTF  = input.int(15, "Chi hien thi khi khung <= (phut)", minval = 1, group = grpV)
+
+inSess(string sess) =>
+    not na(time(timeframe.period, sess, TZ))
+
+bool tfOk = timeframe.isintraday and timeframe.in_seconds() <= maxTF * 60
+
+// Goi time() o MOI nen, ngoai bieu thuc and/or: v6 danh gia and/or kieu lazy,
+// dat time() ben phai `mX and` se bi bo qua o mot so nen.
+bool s1 = inSess("0233-0300")
+bool s2 = inSess("0403-0430")
+bool s3 = inSess("0850-0910")
+bool s4 = inSess("0950-1010")
+bool s5 = inSess("1050-1110")
+bool s6 = inSess("1150-1210")
+bool s7 = inSess("1310-1340")
+bool s8 = inSess("1515-1545")
+
+bool inMacro = (m1 and s1) or (m2 and s2) or (m3 and s3) or (m4 and s4) or
+               (m5 and s5) or (m6 and s6) or (m7 and s7) or (m8 and s8)
+
+bgcolor(tfOk and inMacro ? col : na, title = "Macro")
