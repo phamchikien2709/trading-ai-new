@@ -37,7 +37,7 @@
 //  tu 02:35.
 //
 //  HAI NGUONG KHUNG: macro chi co nghia o khung nho (mac dinh <= 15 phut);
-//  killzone va Midnight Open van doc duoc tren H1 (mac dinh <= 60 phut).
+//  killzone, Midnight Open va cac muc gia van doc duoc tren H1 (mac dinh <= 60 phut).
 //
 //  Ve bang bgcolor/plot — khong line.new; label chi 6 cai o nen cuoi.
 // =============================================================================
@@ -83,7 +83,7 @@ showTag = input.bool(true, "Nhan ten o nen cuoi", group = grpL)
 
 grpV = "Nguong khung thoi gian"
 maxTFMacro = input.int(15, "Macro: chi hien khi khung <= (phut)", minval = 1, group = grpV)
-maxTFKz    = input.int(60, "Killzone + Midnight Open: khung <= (phut)", minval = 1, group = grpV)
+maxTFKz    = input.int(60, "Killzone + cac muc gia: khung <= (phut)", minval = 1, group = grpV)
 
 inSess(string sess) =>
     not na(time(timeframe.period, sess, TZ))
