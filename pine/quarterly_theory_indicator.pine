@@ -28,11 +28,17 @@
 //  MUI GIO: moi phep tinh gio theo "America/New_York" nen DST tu xu ly. Chart
 //  de UTC+7: mua he VN = NY +11h, mua dong VN = NY +12h.
 //
+//  BOX RANGE QUY 90': moi quy 90' mot box high/low, gian theo gia khi quy dang
+//  chay, chu "Q1".."Q4" trong box. Mau theo vai tro AMDX: Q1 Accumulation (xam),
+//  Q2 Manipulation (do), Q3 Distribution (xanh la), Q4 X (xanh duong). Chon phien
+//  de ve; mac dinh chi NY AM (06:00-12:00 NY). Cung nguong khung voi duong 90'.
+//  4 box/phien/ngay, max 500: chi NY AM ~125 ngay, ca 4 phien ~31 ngay.
+//
 //  GIOI HAN: duong doc dung line.new — 4 + 16 = 20 duong/ngay, max 500 -> ~25
 //  ngay gan nhat; cu hon tu bien mat. True Open dung plot, khong gioi han.
 // =============================================================================
 indicator("Quarterly Theory", shorttitle = "QT", overlay = true,
-     max_lines_count = 500, max_labels_count = 500)
+     max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500)
 
 const string TZ = "America/New_York"
 
@@ -52,6 +58,16 @@ showSTO = input.bool(true, "Session TO", inline = "s", group = grpT)
 cSTO    = input.color(color.new(color.teal, 0),   "", inline = "s", group = grpT)
 wTO     = input.int(1, "Do day", minval = 1, maxval = 4, group = grpT)
 showTag = input.bool(true, "Nhan ten o nen cuoi", group = grpT)
+
+grpB = "Box range quy 90'"
+bxAsia = input.bool(false, "Phien Asia   18:00-00:00", group = grpB)
+bxLon  = input.bool(false, "Phien London 00:00-06:00", group = grpB)
+bxNyAm = input.bool(true,  "Phien NY AM  06:00-12:00", group = grpB)
+bxNyPm = input.bool(false, "Phien NY PM  12:00-18:00", group = grpB)
+cB1 = input.color(color.new(color.gray, 88),  "Q1 Accumulation", group = grpB)
+cB2 = input.color(color.new(color.red, 88),   "Q2 Manipulation", group = grpB)
+cB3 = input.color(color.new(color.green, 88), "Q3 Distribution", group = grpB)
+cB4 = input.color(color.new(color.blue, 88),  "Q4 X",            group = grpB)
 
 grpV = "Nguong khung thoi gian"
 maxTF90 = input.int(15, "Duong quy 90': chi hien khi khung <= (phut)", minval = 1, group = grpV)
@@ -85,6 +101,24 @@ if bDay and showDayQ and tfDay
              style = label.style_none, textcolor = cDayQ, size = size.small)
 else if b90 and show90Q and tf90
     vline(c90Q, line.style_dotted, 1)
+
+// --- box range quy 90' -----------------------------------------------------
+// Moc 90' moi: tha box cu (giu tren chart), mo box moi neu phien duoc bat. Giua
+// quy: gian box theo high/low. qDay la chi so phien: 0 Asia .. 3 NY PM.
+var box qb = na
+bool sessOn = qDay == 0 ? bxAsia : qDay == 1 ? bxLon : qDay == 2 ? bxNyAm : bxNyPm
+if b90
+    qb := na
+    if tf90 and sessOn
+        color cq = qSess == 0 ? cB1 : qSess == 1 ? cB2 : qSess == 2 ? cB3 : cB4
+        qb := box.new(bar_index, high, bar_index, low, border_color = color.new(cq, 50),
+             bgcolor = cq, text = "Q" + str.tostring(qSess + 1), text_size = size.small,
+             text_color = color.new(cq, 20), text_halign = text.align_left,
+             text_valign = text.align_top)
+else if not na(qb)
+    box.set_right(qb, bar_index)
+    box.set_top(qb, math.max(box.get_top(qb), high))
+    box.set_bottom(qb, math.min(box.get_bottom(qb), low))
 
 // --- True Open --------------------------------------------------------------
 var float wto = na
