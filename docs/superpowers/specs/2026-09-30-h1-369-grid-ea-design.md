@@ -12,7 +12,11 @@ EA MQL5 `mql5/Experts/H1_369_Grid_EA.mq5`, cho tài khoản MT5 cent (XAUUSDc), 
   4. Đặt 3 lệnh limit theo trend:
      - BULLISH: Buy Limit tại S1/S2/S3 + 0.2, TP = mốc ngay trên − 0.2 (S1→R1, S2→S1, S3→S2)
      - BEARISH: Sell Limit tại R1/R2/R3 − 0.2, TP = mốc ngay dưới + 0.2 (R1→S1, R2→R1, R3→R2)
-- Lệnh đã khớp giữ nguyên TP, EA không sửa.
+- **Kéo TP** (`InpTpPull`, mặc định bật): chỉ áp dụng cho lệnh của EA. Mỗi tick, lệnh EA sâu nhất mỗi chiều (buy có giá vào thấp nhất, sell có giá vào cao nhất) quyết định TP chung, và mọi lệnh EA cùng chiều được sửa về TP đó.
+  - S1 + S2 khớp: TP của S1 thành S1 − 0.2. Tổng khoảng +8.2 giá × lot.
+  - S3 khớp: TP của S1, S2 thành S2 − 0.2. Tổng khoảng −1.2 giá × lot; người dùng chấp nhận để thoát nhanh.
+  - Nếu TP mới sát giá hơn stops level thì bỏ qua. Nếu sửa lỗi thì chờ 10 giây rồi thử lại.
+  - Lệnh đặt tay không bị sửa. Tắt `InpTpPull` thì lệnh đã khớp giữ nguyên TP.
 - **Trong giờ:** khi một lệnh của EA đóng do chạm TP (`OnTradeTransaction`, `DEAL_REASON_TP`), EA đặt lại limit ở các mốc còn trống của giờ hiện tại, cùng trend và cùng mốc. Mốc đã có limit hoặc đã có lệnh mở thì bỏ qua. Tổng lệnh mở + lệnh chờ + limit mới không vượt `InpMaxPositions`.
 - Không SL, không cắt lỗ theo equity.
 - Nếu một mức limit sát hoặc vượt giá (khoảng cách nhỏ hơn stops level) thì bỏ mức đó và ghi log.
@@ -26,6 +30,7 @@ EA MQL5 `mql5/Experts/H1_369_Grid_EA.mq5`, cho tài khoản MT5 cent (XAUUSDc), 
 | InpLevels | 3 | số lệnh limit mỗi giờ |
 | InpOffset | 0.2 | offset spread |
 | InpTpMode | mốc kế bên | TP_NEXT_LEVEL (mặc định) hoặc TP_R1_COMMON (R1/S1 chung) |
+| InpTpPull | true | kéo TP mọi lệnh EA cùng chiều về TP lệnh sâu nhất |
 | InpLevelTf | H1 | khung lấy Open và reset lệnh |
 | InpPlaceOnStart | true | đặt lệnh ngay khi gắn EA theo Open của giờ hiện tại |
 | InpMaxPositions | 6 | lệnh mở tối đa trên symbol; lệnh mở + limit mới không vượt (0 = không giới hạn) |

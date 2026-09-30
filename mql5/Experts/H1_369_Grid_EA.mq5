@@ -16,6 +16,8 @@
 //|  => không đặt limit trùng.                                       |
 //|  Trong giờ: lệnh EA chạm TP => đặt lại limit ở mốc còn trống     |
 //|  của giờ hiện tại (cùng trend, cùng mốc).                        |
+//|  Kéo TP (InpTpPull): lệnh EA khớp sâu hơn (S2, S3 / R2, R3)      |
+//|  => mọi lệnh EA cùng chiều lấy TP của lệnh sâu nhất.             |
 //|  Tối đa InpMaxPositions lệnh mở (EA + lệnh tay): mở + limit mới  |
 //|  không vượt giới hạn (0 = không giới hạn).                       |
 //|  Bảng trên chart: trend, mốc, lệnh mở (EA + tay), lệnh chờ,      |
@@ -39,6 +41,7 @@ input double          InpStep      = 9.0;            // Bước mốc (9 = số 
 input int             InpLevels    = 3;              // Số lệnh limit mỗi giờ
 input double          InpOffset    = 0.2;            // Offset spread (giá)
 input ENUM_TP_MODE    InpTpMode    = TP_NEXT_LEVEL;  // Cách đặt TP
+input bool            InpTpPull    = true;           // Khớp mốc sâu hơn => kéo TP mọi lệnh EA cùng chiều về TP lệnh sâu nhất
 input ENUM_TIMEFRAMES InpLevelTf   = PERIOD_H1;      // Khung lấy Open / reset lệnh
 input bool            InpPlaceOnStart = true;        // Đặt lệnh ngay khi gắn EA (theo Open giờ hiện tại)
 input double          InpDupTol    = 1.0;            // Coi là trùng mốc nếu lệnh mở cách mốc <= (giá)
@@ -70,6 +73,7 @@ bool     needRefill = false; // có lệnh EA vừa chạm TP -> đặt lại m�
 double   curS1 = 0, curR1 = 0;   // mốc của giờ hiện tại (cho bảng / đường mốc)
 bool     dirty = true;           // cần vẽ lại bảng ngay
 datetime lastDraw = 0;
+datetime pullFailAt = 0;         // lần sửa TP lỗi gần nhất (tránh gửi lại mỗi tick)
 
 // ------------------------------------------------------------ panel ----
 #define PFX   "H369_"
@@ -161,6 +165,9 @@ void OnTick()
 //+------------------------------------------------------------------+
 void RunLogic()
   {
+   if(InpTpPull)
+      PullTp();
+
    datetime t = iTime(_Symbol, InpLevelTf, 0);
    if(t == 0)
       return;
@@ -202,6 +209,78 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
    if(HistoryDealGetInteger(trans.deal, DEAL_ENTRY) == DEAL_ENTRY_OUT
       && HistoryDealGetInteger(trans.deal, DEAL_REASON) == DEAL_REASON_TP)
       needRefill = true;
+  }
+
+//+------------------------------------------------------------------+
+//| Kéo TP: lệnh EA sâu nhất mỗi chiều (buy giá vào thấp nhất,       |
+//| sell cao nhất) quyết định TP chung cho mọi lệnh EA cùng chiều.   |
+//| vd S1 + S2 khớp => TP S1 = TP S2 (S1 - 0.2);                     |
+//|    S3 khớp => TP S1, S2 = TP S3 (S2 - 0.2).                      |
+//+------------------------------------------------------------------+
+void PullTp()
+  {
+   if(TimeCurrent() - pullFailAt < 10)
+      return;
+   PullTpSide(POSITION_TYPE_BUY);
+   PullTpSide(POSITION_TYPE_SELL);
+  }
+
+void PullTpSide(const ENUM_POSITION_TYPE type)
+  {
+   bool   isBuy = type == POSITION_TYPE_BUY;
+   double deep  = 0, target = 0;
+   bool   found = false;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!SelectEaPosition(i, type))
+         continue;
+      double op = PositionGetDouble(POSITION_PRICE_OPEN);
+      if(!found || (isBuy ? op < deep : op > deep))
+        {
+         deep   = op;
+         target = PositionGetDouble(POSITION_TP);
+         found  = true;
+        }
+     }
+   if(!found || target <= 0)
+      return;             // không có lệnh / lệnh sâu nhất không có TP
+
+   // TP phải cách giá hiện tại >= stops level, không thì để lệnh sâu nhất tự chốt
+   double minDist = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
+   if(isBuy ? target < SymbolInfoDouble(_Symbol, SYMBOL_BID) + minDist
+            : target > SymbolInfoDouble(_Symbol, SYMBOL_ASK) - minDist)
+      return;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      if(!SelectEaPosition(i, type))
+         continue;
+      if(MathAbs(PositionGetDouble(POSITION_TP) - target) < _Point / 2)
+         continue;
+      ulong tk = (ulong)PositionGetInteger(POSITION_TICKET);
+      double op = PositionGetDouble(POSITION_PRICE_OPEN);
+      if(trade.PositionModify(tk, PositionGetDouble(POSITION_SL), target))
+        {
+         PrintFormat("Kéo TP %s #%I64u (vào %.2f) về %.2f theo lệnh sâu nhất %.2f",
+                     isBuy ? "BUY" : "SELL", tk, op, target, deep);
+         dirty = true;
+        }
+      else
+        {
+         pullFailAt = TimeCurrent();
+         PrintFormat("Kéo TP #%I64u lỗi: %d %s", tk, trade.ResultRetcode(), trade.ResultRetcodeDescription());
+         return;
+        }
+     }
+  }
+
+bool SelectEaPosition(const int i, const ENUM_POSITION_TYPE type)
+  {
+   ulong tk = PositionGetTicket(i);
+   return tk != 0
+          && PositionGetString(POSITION_SYMBOL) == _Symbol
+          && (ulong)PositionGetInteger(POSITION_MAGIC) == InpMagic
+          && (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) == type;
   }
 
 //+------------------------------------------------------------------+
