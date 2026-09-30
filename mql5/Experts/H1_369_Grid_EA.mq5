@@ -84,6 +84,7 @@ color    CLR_POS  = C'102,187,106';
 color    CLR_NEG  = C'239,83,80';
 color    CLR_WARN = C'255,183,77';
 string   touched[];
+int      bgH = 0;                // chiều cao nền bảng hiện tại
 
 struct PosRow
   {
@@ -139,6 +140,7 @@ void OnDeinit(const int reason)
    IndicatorRelease(hRsi);
    EventKillTimer();
    ObjectsDeleteAll(0, PFX);
+   bgH = 0;
    ChartRedraw();
   }
 
@@ -152,8 +154,8 @@ void OnTimer()
 void OnTick()
   {
    RunLogic();
-   if(dirty || TimeCurrent() != lastDraw)
-      Redraw();
+   if(dirty)
+      Redraw();           // có lệnh thay đổi -> vẽ ngay; còn lại timer 1s lo
   }
 
 //+------------------------------------------------------------------+
@@ -406,6 +408,26 @@ int    Sx(const int x)    { return x * InpPanelFont / 9; }
 int    RowH()             { return (int)MathRound(InpPanelFont * 2.0); }
 string Px(const double p) { return DoubleToString(p, _Digits); }
 
+// ghi thuộc tính chỉ khi thay đổi (ghi lại liên tục làm chart nháy)
+void SetI(const string n, const ENUM_OBJECT_PROPERTY_INTEGER prop, const long v)
+  {
+   if(ObjectGetInteger(0, n, prop) != v)
+      ObjectSetInteger(0, n, prop, v);
+  }
+
+void SetS(const string n, const ENUM_OBJECT_PROPERTY_STRING prop, const string v)
+  {
+   if(ObjectGetString(0, n, prop) != v)
+      ObjectSetString(0, n, prop, v);
+  }
+
+void MoveIf(const string n, const int point, const datetime t, const double price)
+  {
+   if((datetime)ObjectGetInteger(0, n, OBJPROP_TIME, point) != t
+      || MathAbs(ObjectGetDouble(0, n, OBJPROP_PRICE, point) - price) > _Point / 2)
+      ObjectMove(0, n, point, t, price);
+  }
+
 void Touch(const string name)
   {
    int n = ArraySize(touched);
@@ -423,12 +445,13 @@ void Rect(const string name, const int x, const int y, const int w, const int h,
       ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
      }
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
-   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
-   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
-   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, edge);
+   SetI(name, OBJPROP_XDISTANCE, x);
+   SetI(name, OBJPROP_YDISTANCE, y);
+   SetI(name, OBJPROP_XSIZE, w);
+   if(h > 0)
+      SetI(name, OBJPROP_YSIZE, h);
+   SetI(name, OBJPROP_BGCOLOR, bg);
+   SetI(name, OBJPROP_COLOR, edge);
    Touch(name);
   }
 
@@ -444,11 +467,11 @@ void Cell(const int row, const int col, const int x, const string text, const co
       ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
       ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
      }
-   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, InpPanelX + PAD + Sx(x));
-   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, InpPanelY + PAD + row * RowH());
-   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, InpPanelFont);
-   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
-   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   SetI(name, OBJPROP_XDISTANCE, InpPanelX + PAD + Sx(x));
+   SetI(name, OBJPROP_YDISTANCE, InpPanelY + PAD + row * RowH());
+   SetI(name, OBJPROP_FONTSIZE, InpPanelFont);
+   SetI(name, OBJPROP_COLOR, clr);
+   SetS(name, OBJPROP_TEXT, text);
    Touch(name);
   }
 
@@ -521,7 +544,9 @@ void DrawPanel()
   {
    int    W   = Sx(450);
    string cur = AccountInfoString(ACCOUNT_CURRENCY);
-   Rect(PFX + "bg", InpPanelX, InpPanelY, W, 10, CLR_BG, CLR_EDGE);   // chiều cao chỉnh ở cuối
+   if(ObjectFind(0, PFX + "bg") < 0)
+      bgH = 0;            // nền bị xoá (vd người dùng xoá object) -> đặt lại chiều cao
+   Rect(PFX + "bg", InpPanelX, InpPanelY, W, bgH > 0 ? 0 : 10, CLR_BG, CLR_EDGE);   // giữ chiều cao cũ
 
    int r = 0;
    // ---- tiêu đề
@@ -681,7 +706,12 @@ void DrawPanel()
    Cell(r, 3, 340, StringFormat("DD %.1f%%", dd), dd > 20 ? CLR_NEG : dd > 0 ? CLR_WARN : CLR_DIM);
    r++;
 
-   ObjectSetInteger(0, PFX + "bg", OBJPROP_YSIZE, PAD * 2 + r * RowH() - 4);
+   int h = PAD * 2 + r * RowH() - 4;
+   if(h != bgH)
+     {
+      bgH = h;
+      ObjectSetInteger(0, PFX + "bg", OBJPROP_YSIZE, h);
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -699,11 +729,11 @@ void LevelLine(const string id, const double price, const color clr, const ENUM_
       ObjectSetInteger(0, ln, OBJPROP_HIDDEN, true);
       ObjectSetInteger(0, ln, OBJPROP_BACK, true);
      }
-   ObjectMove(0, ln, 0, t0, price);
-   ObjectMove(0, ln, 1, t1, price);
-   ObjectSetInteger(0, ln, OBJPROP_COLOR, clr);
-   ObjectSetInteger(0, ln, OBJPROP_STYLE, st);
-   ObjectSetInteger(0, ln, OBJPROP_WIDTH, 1);
+   MoveIf(ln, 0, t0, price);
+   MoveIf(ln, 1, t1, price);
+   SetI(ln, OBJPROP_COLOR, clr);
+   SetI(ln, OBJPROP_STYLE, st);
+   SetI(ln, OBJPROP_WIDTH, 1);
    Touch(ln);
 
    string tx = PFX + "T_" + id;
@@ -715,10 +745,10 @@ void LevelLine(const string id, const double price, const color clr, const ENUM_
       ObjectSetInteger(0, tx, OBJPROP_HIDDEN, true);
       ObjectSetString(0, tx, OBJPROP_FONT, "Consolas");
      }
-   ObjectMove(0, tx, 0, t1, price);
-   ObjectSetInteger(0, tx, OBJPROP_FONTSIZE, MathMax(6, InpPanelFont - 1));
-   ObjectSetInteger(0, tx, OBJPROP_COLOR, clr);
-   ObjectSetString(0, tx, OBJPROP_TEXT, " " + id + " " + Px(price));
+   MoveIf(tx, 0, t1, price);
+   SetI(tx, OBJPROP_FONTSIZE, MathMax(6, InpPanelFont - 1));
+   SetI(tx, OBJPROP_COLOR, clr);
+   SetS(tx, OBJPROP_TEXT, " " + id + " " + Px(price));
    Touch(tx);
   }
 
