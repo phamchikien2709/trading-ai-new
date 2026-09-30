@@ -13,6 +13,7 @@ EA MQL5 `mql5/Experts/H1_369_Grid_EA.mq5`, cho tài khoản MT5 cent (XAUUSDc), 
      - BULLISH: Buy Limit tại S1/S2/S3 + 0.2, TP = R1 − 0.2
      - BEARISH: Sell Limit tại R1/R2/R3 − 0.2, TP = S1 + 0.2
 - Lệnh đã khớp giữ nguyên TP, EA không sửa.
+- **Trong giờ:** khi một lệnh của EA đóng do chạm TP (`OnTradeTransaction`, `DEAL_REASON_TP`), EA đặt lại limit ở các mốc còn trống của giờ hiện tại, cùng trend và cùng mốc. Mốc đã có limit hoặc đã có lệnh mở thì bỏ qua. Tổng lệnh mở + lệnh chờ + limit mới không vượt `InpMaxPositions`.
 - Không SL, không cắt lỗ theo equity.
 - Nếu một mức limit sát hoặc vượt giá (khoảng cách nhỏ hơn stops level) thì bỏ mức đó và ghi log.
 

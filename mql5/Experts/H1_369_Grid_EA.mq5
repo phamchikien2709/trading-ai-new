@@ -12,6 +12,8 @@
 //|  Lệnh đã khớp giữ nguyên TP. KHÔNG stoploss.                     |
 //|  Mốc đã có lệnh cùng chiều đang mở (của EA hoặc đặt tay)         |
 //|  => không đặt limit trùng.                                       |
+//|  Trong giờ: lệnh EA chạm TP => đặt lại limit ở mốc còn trống     |
+//|  của giờ hiện tại (cùng trend, cùng mốc).                        |
 //|  Tối đa InpMaxPositions lệnh mở (EA + lệnh tay): mở + limit mới  |
 //|  không vượt giới hạn (0 = không giới hạn).                       |
 //+------------------------------------------------------------------+
@@ -50,6 +52,8 @@ input int             InpWmaLen    = 45;             // WMA (trên RSI)
 CTrade   trade;
 int      hRsi = INVALID_HANDLE, hEma = INVALID_HANDLE, hWma = INVALID_HANDLE;
 datetime lastBar = 0;
+int      curTrend = 0;       // trend của giờ hiện tại (chốt lúc mở giờ)
+bool     needRefill = false; // có lệnh EA vừa chạm TP -> đặt lại mốc trống
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -89,16 +93,44 @@ void OnDeinit(const int reason)
 void OnTick()
   {
    datetime t = iTime(_Symbol, InpLevelTf, 0);
-   if(t == 0 || t == lastBar)
+   if(t == 0)
       return;
+
+   if(t == lastBar)
+     {
+      // cùng giờ: lệnh vừa chốt TP -> đặt lại limit ở các mốc còn trống
+      if(needRefill && curTrend != 0)
+        {
+         needRefill = false;
+         PlaceGrid(curTrend);
+        }
+      return;
+     }
 
    int trend = GetTrend();
    if(trend == 0)
       return;             // dữ liệu indicator chưa sẵn sàng -> thử lại tick sau
 
    DeletePendings();
+   curTrend   = trend;
+   needRefill = false;
    PlaceGrid(trend);
    lastBar = t;
+  }
+
+//+------------------------------------------------------------------+
+//| Lệnh của EA đóng do chạm TP => bật cờ đặt lại limit              |
+//+------------------------------------------------------------------+
+void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest &request, const MqlTradeResult &result)
+  {
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD || !HistoryDealSelect(trans.deal))
+      return;
+   if(HistoryDealGetString(trans.deal, DEAL_SYMBOL) != _Symbol
+      || (ulong)HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != InpMagic)
+      return;
+   if(HistoryDealGetInteger(trans.deal, DEAL_ENTRY) == DEAL_ENTRY_OUT
+      && HistoryDealGetInteger(trans.deal, DEAL_REASON) == DEAL_REASON_TP)
+      needRefill = true;
   }
 
 //+------------------------------------------------------------------+
@@ -145,9 +177,10 @@ void PlaceGrid(const int trend)
    double lot = NormLot(InpLot);
    string cmt = "H1 369";
 
-   // limit mới + lệnh đang mở không vượt InpMaxPositions (lệnh chờ đã xoá hết trước khi gọi)
+   // lệnh mở + lệnh chờ của EA + limit mới không vượt InpMaxPositions
    int openCnt = CountPositions();
-   int slots   = InpMaxPositions > 0 ? InpMaxPositions - openCnt : InpLevels;
+   int pendCnt = CountEaPendings();
+   int slots   = InpMaxPositions > 0 ? InpMaxPositions - openCnt - pendCnt : InpLevels;
    int placed  = 0;
    if(slots <= 0)
       PrintFormat("Đã đủ %d/%d lệnh mở, không đặt limit giờ này", openCnt, InpMaxPositions);
@@ -159,6 +192,8 @@ void PlaceGrid(const int trend)
          double lv    = s1 - k * InpStep;
          double price = NormPrice(lv + InpOffset);
          double tp    = NormPrice((InpTpMode == TP_R1_COMMON ? r1 : lv + InpStep) - InpOffset);
+         if(HasPendingAt(ORDER_TYPE_BUY_LIMIT, price))
+            continue;                     // mốc này đã có limit (lần đặt lại trong giờ)
          if(HasPositionAt(POSITION_TYPE_BUY, lv))
            {
             PrintFormat("Bỏ Buy Limit %.2f: đã có lệnh BUY đang mở tại mốc %.2f", price, lv);
@@ -179,6 +214,8 @@ void PlaceGrid(const int trend)
          double lv    = r1 + k * InpStep;
          double price = NormPrice(lv - InpOffset);
          double tp    = NormPrice((InpTpMode == TP_R1_COMMON ? s1 : lv - InpStep) + InpOffset);
+         if(HasPendingAt(ORDER_TYPE_SELL_LIMIT, price))
+            continue;
          if(HasPositionAt(POSITION_TYPE_SELL, lv))
            {
             PrintFormat("Bỏ Sell Limit %.2f: đã có lệnh SELL đang mở tại mốc %.2f", price, lv);
@@ -198,8 +235,37 @@ void PlaceGrid(const int trend)
 
    string maxTxt = InpMaxPositions > 0 ? IntegerToString(InpMaxPositions) : "∞";
    Comment(StringFormat("H1 369 Grid | Trend %s | Open %.2f | S1 %.2f  R1 %.2f | %d limit %s | Lệnh mở %d/%s",
-                        trend > 0 ? "BULLISH" : "BEARISH", o, s1, r1, placed, trend > 0 ? "BUY" : "SELL",
+                        trend > 0 ? "BULLISH" : "BEARISH", o, s1, r1, pendCnt + placed, trend > 0 ? "BUY" : "SELL",
                         openCnt, maxTxt));
+  }
+
+//+------------------------------------------------------------------+
+//| Lệnh chờ của EA                                                  |
+//+------------------------------------------------------------------+
+int CountEaPendings()
+  {
+   int n = 0;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      ulong tk = OrderGetTicket(i);
+      if(tk != 0 && OrderGetString(ORDER_SYMBOL) == _Symbol && (ulong)OrderGetInteger(ORDER_MAGIC) == InpMagic)
+         n++;
+     }
+   return n;
+  }
+
+bool HasPendingAt(const ENUM_ORDER_TYPE type, const double price)
+  {
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      ulong tk = OrderGetTicket(i);
+      if(tk == 0 || OrderGetString(ORDER_SYMBOL) != _Symbol || (ulong)OrderGetInteger(ORDER_MAGIC) != InpMagic)
+         continue;
+      if((ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE) == type
+         && MathAbs(OrderGetDouble(ORDER_PRICE_OPEN) - price) <= InpDupTol)
+         return true;
+     }
+   return false;
   }
 
 //+------------------------------------------------------------------+
