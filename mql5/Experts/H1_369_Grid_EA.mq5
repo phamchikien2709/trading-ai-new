@@ -10,7 +10,8 @@
 //|   4. BULLISH: Buy Limit S1/S2/S3 + offset, TP = R1 - offset      |
 //|      BEARISH: Sell Limit R1/R2/R3 - offset, TP = S1 + offset     |
 //|  Lệnh đã khớp giữ nguyên TP. KHÔNG stoploss.                     |
-//|  Mốc đã có lệnh cùng chiều đang mở => không đặt limit trùng.     |
+//|  Mốc đã có lệnh cùng chiều đang mở (của EA hoặc đặt tay)         |
+//|  => không đặt limit trùng.                                       |
 //+------------------------------------------------------------------+
 #property copyright "KienPC98"
 #property version   "1.00"
@@ -33,6 +34,7 @@ input ENUM_TP_MODE    InpTpMode    = TP_R1_COMMON;   // Cách đặt TP
 input ENUM_TIMEFRAMES InpLevelTf   = PERIOD_H1;      // Khung lấy Open / reset lệnh
 input bool            InpPlaceOnStart = true;        // Đặt lệnh ngay khi gắn EA (theo Open giờ hiện tại)
 input double          InpDupTol    = 1.0;            // Coi là trùng mốc nếu lệnh mở cách mốc <= (giá)
+input bool            InpDupAllOrders = true;        // Tính cả lệnh đặt tay / EA khác khi kiểm tra trùng mốc
 input ulong           InpMagic     = 369369;         // Magic number
 
 input group "Filter trend"
@@ -184,7 +186,8 @@ void PlaceGrid(const int trend)
   }
 
 //+------------------------------------------------------------------+
-//| Có lệnh (của EA) cùng chiều đang mở, giá vào cách mốc lv <= tol  |
+//| Có lệnh cùng chiều đang mở (EA, + lệnh tay nếu InpDupAllOrders), |
+//| giá vào cách mốc lv <= tol                                       |
 //+------------------------------------------------------------------+
 bool HasPositionAt(const ENUM_POSITION_TYPE type, const double lv)
   {
@@ -193,7 +196,9 @@ bool HasPositionAt(const ENUM_POSITION_TYPE type, const double lv)
       ulong tk = PositionGetTicket(i);
       if(tk == 0)
          continue;
-      if(PositionGetString(POSITION_SYMBOL) != _Symbol || (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      if(!InpDupAllOrders && (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagic)
          continue;
       if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != type)
          continue;
