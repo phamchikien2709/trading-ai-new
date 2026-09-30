@@ -12,6 +12,8 @@
 //|  Lệnh đã khớp giữ nguyên TP. KHÔNG stoploss.                     |
 //|  Mốc đã có lệnh cùng chiều đang mở (của EA hoặc đặt tay)         |
 //|  => không đặt limit trùng.                                       |
+//|  Tối đa InpMaxPositions lệnh mở của EA: lệnh mở + limit mới      |
+//|  không vượt giới hạn (0 = không giới hạn).                       |
 //+------------------------------------------------------------------+
 #property copyright "KienPC98"
 #property version   "1.00"
@@ -35,6 +37,7 @@ input ENUM_TIMEFRAMES InpLevelTf   = PERIOD_H1;      // Khung lấy Open / reset
 input bool            InpPlaceOnStart = true;        // Đặt lệnh ngay khi gắn EA (theo Open giờ hiện tại)
 input double          InpDupTol    = 1.0;            // Coi là trùng mốc nếu lệnh mở cách mốc <= (giá)
 input bool            InpDupAllOrders = true;        // Tính cả lệnh đặt tay / EA khác khi kiểm tra trùng mốc
+input int             InpMaxPositions = 6;           // Số lệnh mở tối đa của EA (0 = không giới hạn)
 input ulong           InpMagic     = 369369;         // Magic number
 
 input group "Filter trend"
@@ -141,7 +144,14 @@ void PlaceGrid(const int trend)
    double lot = NormLot(InpLot);
    string cmt = "H1 369";
 
-   for(int k = 0; k < InpLevels; k++)
+   // limit mới + lệnh đang mở không vượt InpMaxPositions (lệnh chờ đã xoá hết trước khi gọi)
+   int openCnt = CountEaPositions();
+   int slots   = InpMaxPositions > 0 ? InpMaxPositions - openCnt : InpLevels;
+   int placed  = 0;
+   if(slots <= 0)
+      PrintFormat("Đã đủ %d/%d lệnh mở, không đặt limit giờ này", openCnt, InpMaxPositions);
+
+   for(int k = 0; k < InpLevels && placed < slots; k++)
      {
       if(trend > 0)
         {
@@ -158,7 +168,9 @@ void PlaceGrid(const int trend)
             PrintFormat("Bỏ Buy Limit %.2f: sát/vượt Ask %.2f", price, ask);
             continue;
            }
-         if(!trade.BuyLimit(lot, price, _Symbol, 0, tp, ORDER_TIME_GTC, 0, cmt))
+         if(trade.BuyLimit(lot, price, _Symbol, 0, tp, ORDER_TIME_GTC, 0, cmt))
+            placed++;
+         else
             PrintFormat("Buy Limit %.2f lỗi: %d %s", price, trade.ResultRetcode(), trade.ResultRetcodeDescription());
         }
       else
@@ -176,13 +188,34 @@ void PlaceGrid(const int trend)
             PrintFormat("Bỏ Sell Limit %.2f: sát/vượt Bid %.2f", price, bid);
             continue;
            }
-         if(!trade.SellLimit(lot, price, _Symbol, 0, tp, ORDER_TIME_GTC, 0, cmt))
+         if(trade.SellLimit(lot, price, _Symbol, 0, tp, ORDER_TIME_GTC, 0, cmt))
+            placed++;
+         else
             PrintFormat("Sell Limit %.2f lỗi: %d %s", price, trade.ResultRetcode(), trade.ResultRetcodeDescription());
         }
      }
 
-   Comment(StringFormat("H1 369 Grid | Trend %s | Open %.2f | S1 %.2f  R1 %.2f | %d limit %s",
-                        trend > 0 ? "BULLISH" : "BEARISH", o, s1, r1, InpLevels, trend > 0 ? "BUY" : "SELL"));
+   string maxTxt = InpMaxPositions > 0 ? IntegerToString(InpMaxPositions) : "∞";
+   Comment(StringFormat("H1 369 Grid | Trend %s | Open %.2f | S1 %.2f  R1 %.2f | %d limit %s | Lệnh mở %d/%s",
+                        trend > 0 ? "BULLISH" : "BEARISH", o, s1, r1, placed, trend > 0 ? "BUY" : "SELL",
+                        openCnt, maxTxt));
+  }
+
+//+------------------------------------------------------------------+
+//| Số lệnh đang mở của EA (symbol + magic), cả buy lẫn sell         |
+//+------------------------------------------------------------------+
+int CountEaPositions()
+  {
+   int n = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) == _Symbol && (ulong)PositionGetInteger(POSITION_MAGIC) == InpMagic)
+         n++;
+     }
+   return n;
   }
 
 //+------------------------------------------------------------------+
