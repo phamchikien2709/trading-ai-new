@@ -7,8 +7,10 @@
 //|   2. Trend H1 nến đã đóng: EMA9(RSI14) > WMA45(RSI14) => BULLISH |
 //|   3. Mốc từ Open H1 mới: S1 = mốc số 9 ngay dưới Open, R1 = S1+9 |
 //|      S2,S3 / R2,R3 cách nhau 9                                   |
-//|   4. BULLISH: Buy Limit S1/S2/S3 + offset, TP = R1 - offset      |
-//|      BEARISH: Sell Limit R1/R2/R3 - offset, TP = S1 + offset     |
+//|   4. BULLISH: Buy Limit S1/S2/S3 + offset                        |
+//|        TP mốc ngay trên - offset: S1->R1, S2->S1, S3->S2         |
+//|      BEARISH: Sell Limit R1/R2/R3 - offset                       |
+//|        TP mốc ngay dưới + offset: R1->S1, R2->R1, R3->R2         |
 //|  Lệnh đã khớp giữ nguyên TP. KHÔNG stoploss.                     |
 //|  Mốc đã có lệnh cùng chiều đang mở (của EA hoặc đặt tay)         |
 //|  => không đặt limit trùng.                                       |
@@ -34,7 +36,7 @@ input double          InpLot       = 0.1;            // Khối lượng mỗi l�
 input double          InpStep      = 9.0;            // Bước mốc (9 = số 9)
 input int             InpLevels    = 3;              // Số lệnh limit mỗi giờ
 input double          InpOffset    = 0.2;            // Offset spread (giá)
-input ENUM_TP_MODE    InpTpMode    = TP_R1_COMMON;   // Cách đặt TP
+input ENUM_TP_MODE    InpTpMode    = TP_NEXT_LEVEL;  // Cách đặt TP
 input ENUM_TIMEFRAMES InpLevelTf   = PERIOD_H1;      // Khung lấy Open / reset lệnh
 input bool            InpPlaceOnStart = true;        // Đặt lệnh ngay khi gắn EA (theo Open giờ hiện tại)
 input double          InpDupTol    = 1.0;            // Coi là trùng mốc nếu lệnh mở cách mốc <= (giá)
