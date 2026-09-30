@@ -10,6 +10,7 @@
 //|   4. BULLISH: Buy Limit S1/S2/S3 + offset, TP = R1 - offset      |
 //|      BEARISH: Sell Limit R1/R2/R3 - offset, TP = S1 + offset     |
 //|  Lệnh đã khớp giữ nguyên TP. KHÔNG stoploss.                     |
+//|  Mốc đã có lệnh cùng chiều đang mở => không đặt limit trùng.     |
 //+------------------------------------------------------------------+
 #property copyright "KienPC98"
 #property version   "1.00"
@@ -31,6 +32,7 @@ input double          InpOffset    = 0.2;            // Offset spread (giá)
 input ENUM_TP_MODE    InpTpMode    = TP_R1_COMMON;   // Cách đặt TP
 input ENUM_TIMEFRAMES InpLevelTf   = PERIOD_H1;      // Khung lấy Open / reset lệnh
 input bool            InpPlaceOnStart = true;        // Đặt lệnh ngay khi gắn EA (theo Open giờ hiện tại)
+input double          InpDupTol    = 1.0;            // Coi là trùng mốc nếu lệnh mở cách mốc <= (giá)
 input ulong           InpMagic     = 369369;         // Magic number
 
 input group "Filter trend"
@@ -144,6 +146,11 @@ void PlaceGrid(const int trend)
          double lv    = s1 - k * InpStep;
          double price = NormPrice(lv + InpOffset);
          double tp    = NormPrice((InpTpMode == TP_R1_COMMON ? r1 : lv + InpStep) - InpOffset);
+         if(HasPositionAt(POSITION_TYPE_BUY, lv))
+           {
+            PrintFormat("Bỏ Buy Limit %.2f: đã có lệnh BUY đang mở tại mốc %.2f", price, lv);
+            continue;
+           }
          if(price > ask - minDist)
            {
             PrintFormat("Bỏ Buy Limit %.2f: sát/vượt Ask %.2f", price, ask);
@@ -157,6 +164,11 @@ void PlaceGrid(const int trend)
          double lv    = r1 + k * InpStep;
          double price = NormPrice(lv - InpOffset);
          double tp    = NormPrice((InpTpMode == TP_R1_COMMON ? s1 : lv - InpStep) + InpOffset);
+         if(HasPositionAt(POSITION_TYPE_SELL, lv))
+           {
+            PrintFormat("Bỏ Sell Limit %.2f: đã có lệnh SELL đang mở tại mốc %.2f", price, lv);
+            continue;
+           }
          if(price < bid + minDist)
            {
             PrintFormat("Bỏ Sell Limit %.2f: sát/vượt Bid %.2f", price, bid);
@@ -169,6 +181,26 @@ void PlaceGrid(const int trend)
 
    Comment(StringFormat("H1 369 Grid | Trend %s | Open %.2f | S1 %.2f  R1 %.2f | %d limit %s",
                         trend > 0 ? "BULLISH" : "BEARISH", o, s1, r1, InpLevels, trend > 0 ? "BUY" : "SELL"));
+  }
+
+//+------------------------------------------------------------------+
+//| Có lệnh (của EA) cùng chiều đang mở, giá vào cách mốc lv <= tol  |
+//+------------------------------------------------------------------+
+bool HasPositionAt(const ENUM_POSITION_TYPE type, const double lv)
+  {
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0)
+         continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol || (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      if((ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE) != type)
+         continue;
+      if(MathAbs(PositionGetDouble(POSITION_PRICE_OPEN) - lv) <= InpDupTol)
+         return true;
+     }
+   return false;
   }
 
 //+------------------------------------------------------------------+
