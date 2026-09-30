@@ -18,6 +18,8 @@
 //|  của giờ hiện tại (cùng trend, cùng mốc).                        |
 //|  Tối đa InpMaxPositions lệnh mở (EA + lệnh tay): mở + limit mới  |
 //|  không vượt giới hạn (0 = không giới hạn).                       |
+//|  Bảng trên chart: trend, mốc, lệnh mở (EA + tay), lệnh chờ,      |
+//|  tổng lời/lỗ, equity, DD; vẽ đường mốc của giờ hiện tại.         |
 //+------------------------------------------------------------------+
 #property copyright "KienPC98"
 #property version   "1.00"
@@ -51,11 +53,56 @@ input int             InpRsiLen    = 14;             // RSI length
 input int             InpEmaLen    = 9;              // EMA (trên RSI)
 input int             InpWmaLen    = 45;             // WMA (trên RSI)
 
+input group "Bảng hiển thị"
+input bool            InpShowPanel    = true;        // Hiện bảng trên chart
+input bool            InpShowLevels   = true;        // Vẽ đường mốc của giờ hiện tại
+input int             InpPanelX       = 10;          // Vị trí X (px từ trái)
+input int             InpPanelY       = 25;          // Vị trí Y (px từ trên)
+input int             InpPanelFont    = 9;           // Cỡ chữ
+input int             InpPanelMaxPos  = 8;           // Số lệnh mở tối đa hiển thị
+input int             InpPanelMaxPend = 6;           // Số lệnh chờ tối đa hiển thị
+
 CTrade   trade;
 int      hRsi = INVALID_HANDLE, hEma = INVALID_HANDLE, hWma = INVALID_HANDLE;
 datetime lastBar = 0;
 int      curTrend = 0;       // trend của giờ hiện tại (chốt lúc mở giờ)
 bool     needRefill = false; // có lệnh EA vừa chạm TP -> đặt lại mốc trống
+double   curS1 = 0, curR1 = 0;   // mốc của giờ hiện tại (cho bảng / đường mốc)
+bool     dirty = true;           // cần vẽ lại bảng ngay
+datetime lastDraw = 0;
+
+// ------------------------------------------------------------ panel ----
+#define PFX   "H369_"
+#define PAD   8
+color    CLR_BG   = C'22,26,34';
+color    CLR_EDGE = C'60,70,90';
+color    CLR_TXT  = C'230,233,240';
+color    CLR_DIM  = C'140,150,165';
+color    CLR_BUY  = C'38,166,154';
+color    CLR_SELL = C'239,83,80';
+color    CLR_POS  = C'102,187,106';
+color    CLR_NEG  = C'239,83,80';
+color    CLR_WARN = C'255,183,77';
+string   touched[];
+
+struct PosRow
+  {
+   long   type;
+   bool   ea;
+   double lot;
+   double price;
+   double tp;
+   double pl;
+  };
+
+struct PendRow
+  {
+   long   type;
+   bool   ea;
+   double lot;
+   double price;
+   double tp;
+  };
 
 //+------------------------------------------------------------------+
 int OnInit()
@@ -79,6 +126,8 @@ int OnInit()
 
    // không đặt ngay => chờ tới nến mới
    lastBar = InpPlaceOnStart ? 0 : iTime(_Symbol, InpLevelTf, 0);
+   EventSetTimer(1);
+   Redraw();
    return INIT_SUCCEEDED;
   }
 
@@ -88,11 +137,27 @@ void OnDeinit(const int reason)
    IndicatorRelease(hEma);
    IndicatorRelease(hWma);
    IndicatorRelease(hRsi);
-   Comment("");
+   EventKillTimer();
+   ObjectsDeleteAll(0, PFX);
+   ChartRedraw();
+  }
+
+//+------------------------------------------------------------------+
+void OnTimer()
+  {
+   Redraw();              // đồng hồ reset chạy cả khi không có tick
   }
 
 //+------------------------------------------------------------------+
 void OnTick()
+  {
+   RunLogic();
+   if(dirty || TimeCurrent() != lastDraw)
+      Redraw();
+  }
+
+//+------------------------------------------------------------------+
+void RunLogic()
   {
    datetime t = iTime(_Symbol, InpLevelTf, 0);
    if(t == 0)
@@ -127,8 +192,10 @@ void OnTradeTransaction(const MqlTradeTransaction &trans, const MqlTradeRequest 
   {
    if(trans.type != TRADE_TRANSACTION_DEAL_ADD || !HistoryDealSelect(trans.deal))
       return;
-   if(HistoryDealGetString(trans.deal, DEAL_SYMBOL) != _Symbol
-      || (ulong)HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != InpMagic)
+   if(HistoryDealGetString(trans.deal, DEAL_SYMBOL) != _Symbol)
+      return;
+   dirty = true;          // có giao dịch trên symbol -> vẽ lại bảng
+   if((ulong)HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != InpMagic)
       return;
    if(HistoryDealGetInteger(trans.deal, DEAL_ENTRY) == DEAL_ENTRY_OUT
       && HistoryDealGetInteger(trans.deal, DEAL_REASON) == DEAL_REASON_TP)
@@ -178,6 +245,9 @@ void PlaceGrid(const int trend)
    double minDist = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
    double lot = NormLot(InpLot);
    string cmt = "H1 369";
+   curS1 = s1;
+   curR1 = r1;
+   dirty = true;
 
    // lệnh mở + lệnh chờ của EA + limit mới không vượt InpMaxPositions
    int openCnt = CountPositions();
@@ -234,11 +304,6 @@ void PlaceGrid(const int trend)
             PrintFormat("Sell Limit %.2f lỗi: %d %s", price, trade.ResultRetcode(), trade.ResultRetcodeDescription());
         }
      }
-
-   string maxTxt = InpMaxPositions > 0 ? IntegerToString(InpMaxPositions) : "∞";
-   Comment(StringFormat("H1 369 Grid | Trend %s | Open %.2f | S1 %.2f  R1 %.2f | %d limit %s | Lệnh mở %d/%s",
-                        trend > 0 ? "BULLISH" : "BEARISH", o, s1, r1, pendCnt + placed, trend > 0 ? "BUY" : "SELL",
-                        openCnt, maxTxt));
   }
 
 //+------------------------------------------------------------------+
@@ -331,5 +396,343 @@ double NormLot(const double v)
    double st = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    double l  = MathFloor(v / st + 1e-9) * st;
    return MathMax(mn, MathMin(mx, l));
+  }
+//+------------------------------------------------------------------+
+
+//====================================================================
+//  BẢNG HIỂN THỊ
+//====================================================================
+int    Sx(const int x)    { return x * InpPanelFont / 9; }
+int    RowH()             { return (int)MathRound(InpPanelFont * 2.0); }
+string Px(const double p) { return DoubleToString(p, _Digits); }
+
+void Touch(const string name)
+  {
+   int n = ArraySize(touched);
+   ArrayResize(touched, n + 1);
+   touched[n] = name;
+  }
+
+void Rect(const string name, const int x, const int y, const int w, const int h, const color bg, const color edge)
+  {
+   if(ObjectFind(0, name) < 0)
+     {
+      ObjectCreate(0, name, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+     }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_XSIZE, w);
+   ObjectSetInteger(0, name, OBJPROP_YSIZE, h);
+   ObjectSetInteger(0, name, OBJPROP_BGCOLOR, bg);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, edge);
+   Touch(name);
+  }
+
+void Cell(const int row, const int col, const int x, const string text, const color clr)
+  {
+   string name = PFX + "c" + IntegerToString(row) + "_" + IntegerToString(col);
+   if(ObjectFind(0, name) < 0)
+     {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+      ObjectSetString(0, name, OBJPROP_FONT, "Consolas");
+     }
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, InpPanelX + PAD + Sx(x));
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, InpPanelY + PAD + row * RowH());
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, InpPanelFont);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   Touch(name);
+  }
+
+// đường kẻ ngang phân cách phía trên hàng `row`
+void Sep(const int row, const int w)
+  {
+   Rect(PFX + "s" + IntegerToString(row), InpPanelX + PAD, InpPanelY + PAD + row * RowH() - 3,
+        w - 2 * PAD, 1, CLR_EDGE, CLR_EDGE);
+  }
+
+string Countdown()
+  {
+   if(lastBar == 0)
+      return "--:--";
+   long s = (long)(lastBar + PeriodSeconds(InpLevelTf) - TimeTradeServer());
+   if(s < 0)
+      s = 0;
+   return StringFormat("%02d:%02d", (int)(s / 60), (int)(s % 60));
+  }
+
+string PendName(const long type)
+  {
+   if(type == ORDER_TYPE_BUY_LIMIT)
+      return "BUY LIMIT";
+   if(type == ORDER_TYPE_SELL_LIMIT)
+      return "SELL LIMIT";
+   if(type == ORDER_TYPE_BUY_STOP)
+      return "BUY STOP";
+   if(type == ORDER_TYPE_SELL_STOP)
+      return "SELL STOP";
+   return "KHÁC";
+  }
+
+bool IsBuyPend(const long type)
+  {
+   return type == ORDER_TYPE_BUY_LIMIT || type == ORDER_TYPE_BUY_STOP || type == ORDER_TYPE_BUY_STOP_LIMIT;
+  }
+
+//+------------------------------------------------------------------+
+void Redraw()
+  {
+   dirty    = false;
+   lastDraw = TimeCurrent();
+   if(MQLInfoInteger(MQL_TESTER) && !MQLInfoInteger(MQL_VISUAL_MODE))
+      return;             // tester không hiển thị -> bỏ qua cho nhanh
+
+   ArrayResize(touched, 0);
+   if(InpShowPanel)
+      DrawPanel();
+   if(InpShowLevels)
+      DrawLevels();
+
+   // xoá object cũ không còn dùng (vd dòng lệnh đã đóng)
+   for(int i = ObjectsTotal(0, -1, -1) - 1; i >= 0; i--)
+     {
+      string nm = ObjectName(0, i, -1, -1);
+      if(StringFind(nm, PFX) != 0)
+         continue;
+      bool keep = false;
+      for(int j = 0; j < ArraySize(touched) && !keep; j++)
+         keep = (touched[j] == nm);
+      if(!keep)
+         ObjectDelete(0, nm);
+     }
+   ChartRedraw();
+  }
+
+//+------------------------------------------------------------------+
+void DrawPanel()
+  {
+   int    W   = Sx(450);
+   string cur = AccountInfoString(ACCOUNT_CURRENCY);
+   Rect(PFX + "bg", InpPanelX, InpPanelY, W, 10, CLR_BG, CLR_EDGE);   // chiều cao chỉnh ở cuối
+
+   int r = 0;
+   // ---- tiêu đề
+   Cell(r, 0, 0, "H1 369 GRID  " + _Symbol, CLR_TXT);
+   Cell(r, 1, 220, curTrend > 0 ? "▲ BULLISH" : curTrend < 0 ? "▼ BEARISH" : "… chờ dữ liệu",
+        curTrend > 0 ? CLR_BUY : curTrend < 0 ? CLR_SELL : CLR_DIM);
+   Cell(r, 2, 330, "reset sau " + Countdown(), CLR_DIM);
+   r++;
+
+   // ---- mốc giờ hiện tại (theo chiều lưới)
+   string lv = "";
+   if(curS1 > 0)
+     {
+      if(curTrend < 0)
+        {
+         for(int k = InpLevels - 1; k >= 0; k--)
+            lv += StringFormat("R%d %s  ", k + 1, Px(curR1 + k * InpStep));
+         lv += "S1 " + Px(curS1);
+        }
+      else
+        {
+         lv = "R1 " + Px(curR1);
+         for(int k = 0; k < InpLevels; k++)
+            lv += StringFormat("  S%d %s", k + 1, Px(curS1 - k * InpStep));
+        }
+     }
+   Cell(r, 0, 0, lv == "" ? "Mốc: chờ nến H1" : lv, CLR_DIM);
+   r++;
+
+   // ---- lệnh đang mở (mọi lệnh trên symbol)
+   PosRow pos[];
+   double totPl = 0;
+   int    nPos  = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+     {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0 || PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      ArrayResize(pos, nPos + 1);
+      pos[nPos].type  = PositionGetInteger(POSITION_TYPE);
+      pos[nPos].ea    = (ulong)PositionGetInteger(POSITION_MAGIC) == InpMagic;
+      pos[nPos].lot   = PositionGetDouble(POSITION_VOLUME);
+      pos[nPos].price = PositionGetDouble(POSITION_PRICE_OPEN);
+      pos[nPos].tp    = PositionGetDouble(POSITION_TP);
+      pos[nPos].pl    = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+      totPl += pos[nPos].pl;
+      nPos++;
+     }
+   for(int a = 1; a < nPos; a++)               // giá vào cao -> thấp
+      for(int b = a; b > 0 && pos[b].price > pos[b - 1].price; b--)
+        {
+         PosRow tmp = pos[b];
+         pos[b] = pos[b - 1];
+         pos[b - 1] = tmp;
+        }
+
+   Sep(r, W);
+   Cell(r, 0, 0, "LỆNH ĐANG MỞ", CLR_TXT);
+   Cell(r, 1, 360, IntegerToString(CountPositions()) + " / "
+        + (InpMaxPositions > 0 ? IntegerToString(InpMaxPositions) : "∞"), CLR_DIM);
+   r++;
+   if(nPos == 0)
+     {
+      Cell(r, 0, 0, "— không có —", CLR_DIM);
+      r++;
+     }
+   else
+     {
+      Cell(r, 0, 0, "Loại", CLR_DIM);
+      Cell(r, 1, 55, "Nguồn", CLR_DIM);
+      Cell(r, 2, 105, "Lot", CLR_DIM);
+      Cell(r, 3, 160, "Giá vào", CLR_DIM);
+      Cell(r, 4, 250, "TP", CLR_DIM);
+      Cell(r, 5, 340, "Lời/lỗ", CLR_DIM);
+      r++;
+      int show = MathMin(nPos, InpPanelMaxPos);
+      for(int i = 0; i < show; i++, r++)
+        {
+         bool buy = pos[i].type == POSITION_TYPE_BUY;
+         Cell(r, 0, 0, buy ? "BUY" : "SELL", buy ? CLR_BUY : CLR_SELL);
+         Cell(r, 1, 55, pos[i].ea ? "EA" : "Tay", pos[i].ea ? CLR_TXT : CLR_WARN);
+         Cell(r, 2, 105, DoubleToString(pos[i].lot, 2), CLR_TXT);
+         Cell(r, 3, 160, Px(pos[i].price), CLR_TXT);
+         Cell(r, 4, 250, pos[i].tp > 0 ? Px(pos[i].tp) : "—", CLR_TXT);
+         Cell(r, 5, 340, StringFormat("%+.2f", pos[i].pl), pos[i].pl >= 0 ? CLR_POS : CLR_NEG);
+        }
+      if(nPos > show)
+        {
+         Cell(r, 0, 0, StringFormat("+ %d lệnh khác", nPos - show), CLR_DIM);
+         r++;
+        }
+     }
+
+   // ---- lệnh chờ (mọi lệnh chờ trên symbol)
+   PendRow pd[];
+   int nPd = 0;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+     {
+      ulong tk = OrderGetTicket(i);
+      if(tk == 0 || OrderGetString(ORDER_SYMBOL) != _Symbol)
+         continue;
+      ArrayResize(pd, nPd + 1);
+      pd[nPd].type  = OrderGetInteger(ORDER_TYPE);
+      pd[nPd].ea    = (ulong)OrderGetInteger(ORDER_MAGIC) == InpMagic;
+      pd[nPd].lot   = OrderGetDouble(ORDER_VOLUME_CURRENT);
+      pd[nPd].price = OrderGetDouble(ORDER_PRICE_OPEN);
+      pd[nPd].tp    = OrderGetDouble(ORDER_TP);
+      nPd++;
+     }
+   for(int a = 1; a < nPd; a++)
+      for(int b = a; b > 0 && pd[b].price > pd[b - 1].price; b--)
+        {
+         PendRow tmp = pd[b];
+         pd[b] = pd[b - 1];
+         pd[b - 1] = tmp;
+        }
+
+   Sep(r, W);
+   Cell(r, 0, 0, "LỆNH CHỜ", CLR_TXT);
+   Cell(r, 1, 360, IntegerToString(nPd), CLR_DIM);
+   r++;
+   if(nPd == 0)
+     {
+      Cell(r, 0, 0, "— không có —", CLR_DIM);
+      r++;
+     }
+   else
+     {
+      double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      int show = MathMin(nPd, InpPanelMaxPend);
+      for(int i = 0; i < show; i++, r++)
+        {
+         bool   buy  = IsBuyPend(pd[i].type);
+         double dist = pd[i].price - (buy ? ask : bid);
+         Cell(r, 0, 0, PendName(pd[i].type), buy ? CLR_BUY : CLR_SELL);
+         Cell(r, 1, 90, pd[i].ea ? "EA" : "Tay", pd[i].ea ? CLR_TXT : CLR_WARN);
+         Cell(r, 2, 130, Px(pd[i].price), CLR_TXT);
+         Cell(r, 3, 215, pd[i].tp > 0 ? "TP " + Px(pd[i].tp) : "TP —", CLR_TXT);
+         Cell(r, 4, 330, StringFormat("cách %+.1f", dist), CLR_DIM);
+        }
+      if(nPd > show)
+        {
+         Cell(r, 0, 0, StringFormat("+ %d lệnh khác", nPd - show), CLR_DIM);
+         r++;
+        }
+     }
+
+   // ---- tổng
+   double bal = AccountInfoDouble(ACCOUNT_BALANCE);
+   double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
+   double dd  = bal > 0 ? MathMax(0.0, (bal - eq) / bal * 100.0) : 0.0;
+   Sep(r, W);
+   Cell(r, 0, 0, "Lời/lỗ", CLR_DIM);
+   Cell(r, 1, 55, StringFormat("%+.2f", totPl), totPl >= 0 ? CLR_POS : CLR_NEG);
+   Cell(r, 2, 160, "Equity " + DoubleToString(eq, 2) + " " + cur, CLR_TXT);
+   Cell(r, 3, 340, StringFormat("DD %.1f%%", dd), dd > 20 ? CLR_NEG : dd > 0 ? CLR_WARN : CLR_DIM);
+   r++;
+
+   ObjectSetInteger(0, PFX + "bg", OBJPROP_YSIZE, PAD * 2 + r * RowH() - 4);
+  }
+
+//+------------------------------------------------------------------+
+//| Đường mốc của giờ hiện tại: từ đầu giờ tới cuối giờ              |
+//+------------------------------------------------------------------+
+void LevelLine(const string id, const double price, const color clr, const ENUM_LINE_STYLE st,
+               const datetime t0, const datetime t1)
+  {
+   string ln = PFX + "L_" + id;
+   if(ObjectFind(0, ln) < 0)
+     {
+      ObjectCreate(0, ln, OBJ_TREND, 0, t0, price, t1, price);
+      ObjectSetInteger(0, ln, OBJPROP_RAY_RIGHT, false);
+      ObjectSetInteger(0, ln, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, ln, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, ln, OBJPROP_BACK, true);
+     }
+   ObjectMove(0, ln, 0, t0, price);
+   ObjectMove(0, ln, 1, t1, price);
+   ObjectSetInteger(0, ln, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, ln, OBJPROP_STYLE, st);
+   ObjectSetInteger(0, ln, OBJPROP_WIDTH, 1);
+   Touch(ln);
+
+   string tx = PFX + "T_" + id;
+   if(ObjectFind(0, tx) < 0)
+     {
+      ObjectCreate(0, tx, OBJ_TEXT, 0, t1, price);
+      ObjectSetInteger(0, tx, OBJPROP_ANCHOR, ANCHOR_LEFT);
+      ObjectSetInteger(0, tx, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, tx, OBJPROP_HIDDEN, true);
+      ObjectSetString(0, tx, OBJPROP_FONT, "Consolas");
+     }
+   ObjectMove(0, tx, 0, t1, price);
+   ObjectSetInteger(0, tx, OBJPROP_FONTSIZE, MathMax(6, InpPanelFont - 1));
+   ObjectSetInteger(0, tx, OBJPROP_COLOR, clr);
+   ObjectSetString(0, tx, OBJPROP_TEXT, " " + id + " " + Px(price));
+   Touch(tx);
+  }
+
+void DrawLevels()
+  {
+   if(curS1 <= 0 || lastBar == 0)
+      return;
+   datetime t0 = lastBar;
+   datetime t1 = t0 + PeriodSeconds(InpLevelTf);
+   for(int k = 0; k < InpLevels; k++)
+     {
+      ENUM_LINE_STYLE st = k == 0 ? STYLE_SOLID : STYLE_DASH;
+      LevelLine("S" + IntegerToString(k + 1), curS1 - k * InpStep, CLR_BUY, st, t0, t1);
+      LevelLine("R" + IntegerToString(k + 1), curR1 + k * InpStep, CLR_SELL, st, t0, t1);
+     }
   }
 //+------------------------------------------------------------------+

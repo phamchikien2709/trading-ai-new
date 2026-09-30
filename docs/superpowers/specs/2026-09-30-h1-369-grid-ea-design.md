@@ -33,6 +33,19 @@ EA MQL5 `mql5/Experts/H1_369_Grid_EA.mq5`, cho tài khoản MT5 cent (XAUUSDc), 
 | InpMagic | 369369 | magic number |
 | InpTrendTf / RSI / EMA / WMA | H1 / 14 / 9 / 45 | filter trend |
 
+## Bảng hiển thị
+
+Thay cho `Comment()`: bảng nền tối (OBJ_RECTANGLE_LABEL + OBJ_LABEL, font Consolas) ở góc trên trái, cập nhật mỗi giây qua `OnTimer`, và vẽ lại ngay khi có giao dịch trên symbol.
+
+- Tiêu đề: symbol, trend (▲ BULLISH / ▼ BEARISH), đồng hồ đếm ngược tới lần reset giờ tới.
+- Mốc của giờ hiện tại theo chiều lưới.
+- Lệnh đang mở trên symbol (EA + tay): Loại, Nguồn, Lot, Giá vào, TP, Lời/lỗ (gồm swap), sắp xếp giá cao → thấp. Có đếm x / InpMaxPositions.
+- Lệnh chờ trên symbol: loại, nguồn, giá, TP, khoảng cách tới giá hiện tại.
+- Tổng lời/lỗ, equity, DD hiện tại = (balance − equity) / balance.
+- Đường mốc S1..Sn / R1..Rn kéo từ đầu giờ tới cuối giờ, có nhãn giá.
+- Input: InpShowPanel, InpShowLevels, InpPanelX/Y, InpPanelFont, InpPanelMaxPos (8), InpPanelMaxPend (6).
+- Tester không bật visual thì không vẽ, cho chạy nhanh.
+
 ## Kiểm thử
 
 - Đã compile bằng MetaEditor: 0 lỗi, 0 cảnh báo.
