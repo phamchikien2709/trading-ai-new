@@ -12,7 +12,7 @@
 //|  Lệnh đã khớp giữ nguyên TP. KHÔNG stoploss.                     |
 //|  Mốc đã có lệnh cùng chiều đang mở (của EA hoặc đặt tay)         |
 //|  => không đặt limit trùng.                                       |
-//|  Tối đa InpMaxPositions lệnh mở của EA: lệnh mở + limit mới      |
+//|  Tối đa InpMaxPositions lệnh mở (EA + lệnh tay): mở + limit mới  |
 //|  không vượt giới hạn (0 = không giới hạn).                       |
 //+------------------------------------------------------------------+
 #property copyright "KienPC98"
@@ -37,7 +37,8 @@ input ENUM_TIMEFRAMES InpLevelTf   = PERIOD_H1;      // Khung lấy Open / reset
 input bool            InpPlaceOnStart = true;        // Đặt lệnh ngay khi gắn EA (theo Open giờ hiện tại)
 input double          InpDupTol    = 1.0;            // Coi là trùng mốc nếu lệnh mở cách mốc <= (giá)
 input bool            InpDupAllOrders = true;        // Tính cả lệnh đặt tay / EA khác khi kiểm tra trùng mốc
-input int             InpMaxPositions = 6;           // Số lệnh mở tối đa của EA (0 = không giới hạn)
+input int             InpMaxPositions = 6;           // Số lệnh mở tối đa (0 = không giới hạn)
+input bool            InpMaxCountAll  = true;        // Giới hạn tính cả lệnh đặt tay / EA khác trên symbol
 input ulong           InpMagic     = 369369;         // Magic number
 
 input group "Filter trend"
@@ -145,7 +146,7 @@ void PlaceGrid(const int trend)
    string cmt = "H1 369";
 
    // limit mới + lệnh đang mở không vượt InpMaxPositions (lệnh chờ đã xoá hết trước khi gọi)
-   int openCnt = CountEaPositions();
+   int openCnt = CountPositions();
    int slots   = InpMaxPositions > 0 ? InpMaxPositions - openCnt : InpLevels;
    int placed  = 0;
    if(slots <= 0)
@@ -202,9 +203,10 @@ void PlaceGrid(const int trend)
   }
 
 //+------------------------------------------------------------------+
-//| Số lệnh đang mở của EA (symbol + magic), cả buy lẫn sell         |
+//| Số lệnh đang mở trên symbol, cả buy lẫn sell                     |
+//| (chỉ của EA nếu InpMaxCountAll = false)                          |
 //+------------------------------------------------------------------+
-int CountEaPositions()
+int CountPositions()
   {
    int n = 0;
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -212,8 +214,11 @@ int CountEaPositions()
       ulong tk = PositionGetTicket(i);
       if(tk == 0)
          continue;
-      if(PositionGetString(POSITION_SYMBOL) == _Symbol && (ulong)PositionGetInteger(POSITION_MAGIC) == InpMagic)
-         n++;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)
+         continue;
+      if(!InpMaxCountAll && (ulong)PositionGetInteger(POSITION_MAGIC) != InpMagic)
+         continue;
+      n++;
      }
    return n;
   }

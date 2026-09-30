@@ -27,7 +27,8 @@ EA MQL5 `mql5/Experts/H1_369_Grid_EA.mq5`, cho tài khoản MT5 cent (XAUUSDc), 
 | InpTpMode | R1 chung | hoặc "mốc ngay trên/dưới từng lệnh" |
 | InpLevelTf | H1 | khung lấy Open và reset lệnh |
 | InpPlaceOnStart | true | đặt lệnh ngay khi gắn EA theo Open của giờ hiện tại |
-| InpMaxPositions | 6 | lệnh mở tối đa của EA; lệnh mở + limit mới không vượt (0 = không giới hạn) |
+| InpMaxPositions | 6 | lệnh mở tối đa trên symbol; lệnh mở + limit mới không vượt (0 = không giới hạn) |
+| InpMaxCountAll | true | giới hạn tính cả lệnh đặt tay / EA khác |
 | InpMagic | 369369 | magic number |
 | InpTrendTf / RSI / EMA / WMA | H1 / 14 / 9 / 45 | filter trend |
 
